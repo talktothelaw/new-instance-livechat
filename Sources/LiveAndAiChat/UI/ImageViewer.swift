@@ -108,32 +108,28 @@ struct ImageViewerView: View {
         .padding(.top, 6)
     }
 
-    @ViewBuilder
     private var imageContent: some View {
-        if #available(iOS 15.0, *) {
-            AsyncImage(url: URL(string: attachment.url)) { phase in
-                switch phase {
-                case .empty:
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                case .failure:
-                    failurePlaceholder
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .scaleEffect(scale)
-                        .offset(offset)
-                        .gesture(zoomGesture.simultaneously(with: dragGesture))
-                        .onTapGesture(count: 2) { toggleZoom() }
-                @unknown default:
-                    failurePlaceholder
-                }
+        // Re-uses the SDK's two-tier image cache. If the viewer was
+        // opened from a message bubble that's already shown the image,
+        // the memory tier resolves synchronously on the first frame —
+        // tap-to-open is instant, no spinner flash.
+        CachedAsyncImage(
+            url: URL(string: attachment.url),
+            content: { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .gesture(zoomGesture.simultaneously(with: dragGesture))
+                    .onTapGesture(count: 2) { toggleZoom() }
+            },
+            placeholder: {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
             }
-            .padding(.horizontal, 16)
-        } else {
-            failurePlaceholder
-        }
+        )
+        .padding(.horizontal, 16)
     }
 
     private var fileFallback: some View {
@@ -156,17 +152,6 @@ struct ImageViewerView: View {
                     .foregroundColor(.black)
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    private var failurePlaceholder: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "photo")
-                .font(.system(size: 48))
-                .foregroundColor(.white.opacity(0.7))
-            Text("Could not load image")
-                .font(.system(size: 13))
-                .foregroundColor(.white.opacity(0.7))
         }
     }
 

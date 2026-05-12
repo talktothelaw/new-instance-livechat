@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
+import PhotosUI
 import LiveAndAiChat
 
 /// Sample host UI. Mirrors the Android `HeadlessSampleActivity` flow:
@@ -15,7 +16,9 @@ struct RootView: View {
 
     @StateObject private var sdk: LiveAndAiChat
     @State private var showChat = false
+    @State private var showAttachmentChooser = false
     @State private var showFilePicker = false
+    @State private var showPhotoPicker = false
     @State private var showShareSheet = false
     @State private var shareItems: [Any] = []
     @State private var log: [String] = []
@@ -127,8 +130,18 @@ struct RootView: View {
                     sdk.closeChat()
                     showChat = false
                 },
-                onPickFile: { showFilePicker = true }
+                onPickFile: { showAttachmentChooser = true }
             )
+            .actionSheet(isPresented: $showAttachmentChooser) {
+                ActionSheet(
+                    title: Text("Add attachment"),
+                    buttons: [
+                        .default(Text("Photo Library")) { showPhotoPicker = true },
+                        .default(Text("Files")) { showFilePicker = true },
+                        .cancel(),
+                    ]
+                )
+            }
             .fileImporter(
                 isPresented: $showFilePicker,
                 allowedContentTypes: [.png, .jpeg, .webP, .gif, .pdf],
@@ -136,10 +149,30 @@ struct RootView: View {
             ) { result in
                 handleFilePick(result)
             }
+            .sheet(isPresented: $showPhotoPicker) {
+                PhotoPickerSheet(
+                    selectionLimit: 0,
+                    onPicked: handlePhotoPick
+                )
+            }
         }
         .onAppear {
             sdk.initialize()
             attachListener()
+        }
+    }
+
+    /// PHPicker callback — `items` is already loaded as `(data, name,
+    /// mimeType)` triples by `PhotoPickerSheet`. We just hand each one
+    /// to the SDK's attachment queue.
+    private func handlePhotoPick(_ items: [PickedPhoto]) {
+        for item in items {
+            sdk.attachFile(
+                data: item.data,
+                name: item.name,
+                mimeType: item.mimeType,
+                previewUri: nil
+            )
         }
     }
 
@@ -347,4 +380,93 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+/// Resolved photo-picker output. `data` is the original bytes from
+/// the Photos library item (kept as-is for non-image edge cases; for
+/// HEIC etc. callers can re-encode if their backend doesn't accept
+/// the source MIME). `mimeType` matches the source representation.
+struct PickedPhoto {
+    let data: Data
+    let name: String
+    let mimeType: String
+}
+
+/// SwiftUI wrapper around `PHPickerViewController` (iOS 14+). The
+/// system Files picker (`.fileImporter`) only browses iCloud Drive /
+/// On My iPhone / Shared — NOT the user's Photos library. To attach
+/// a photo, this is the correct picker. Resolves each selected item
+/// into `(data, name, mimeType)` and hands them back as `PickedPhoto`s
+/// via the `onPicked` callback. Out-of-process — no `NSPhotoLibrary
+/// UsageDescription` Info.plist entry required.
+struct PhotoPickerSheet: UIViewControllerRepresentable {
+    let selectionLimit: Int  // 0 = unlimited
+    let onPicked: ([PickedPhoto]) -> Void
+
+    @Environment(\.presentationMode) private var presentationMode
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.selectionLimit = selectionLimit
+        config.filter = .images   // photos + screenshots, no video
+        config.preferredAssetRepresentationMode = .compatible
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: PhotoPickerSheet
+        init(_ parent: PhotoPickerSheet) { self.parent = parent }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            // Dismiss immediately — the loads below are async.
+            parent.presentationMode.wrappedValue.dismiss()
+
+            // Resolve the bytes for every selected asset. We use a
+            // serial-ish DispatchGroup so the final `onPicked` fires
+            // once, with all items collected.
+            let group = DispatchGroup()
+            // Preserve picker order even though loads may complete out
+            // of sequence — index the slot per result.
+            var collected: [Int: PickedPhoto] = [:]
+            let lock = NSLock()
+
+            for (idx, result) in results.enumerated() {
+                group.enter()
+                let provider = result.itemProvider
+                // Prefer a directly-loadable image format. The picker
+                // delivers either the source representation (e.g. HEIC)
+                // or a transcoded JPEG depending on
+                // `preferredAssetRepresentationMode = .compatible`.
+                let candidateUTIs = ["public.jpeg", "public.png", "public.heic", "public.image"]
+                let typeId = candidateUTIs.first { provider.hasItemConformingToTypeIdentifier($0) }
+                    ?? "public.image"
+                provider.loadDataRepresentation(forTypeIdentifier: typeId) { data, _ in
+                    defer { group.leave() }
+                    guard let data else { return }
+                    let mime = UTType(typeId)?.preferredMIMEType ?? "image/jpeg"
+                    let ext = UTType(typeId)?.preferredFilenameExtension ?? "jpg"
+                    let base = provider.suggestedName ?? "photo-\(idx + 1)"
+                    let picked = PickedPhoto(
+                        data: data,
+                        name: "\(base).\(ext)",
+                        mimeType: mime
+                    )
+                    lock.lock()
+                    collected[idx] = picked
+                    lock.unlock()
+                }
+            }
+
+            group.notify(queue: .main) {
+                let ordered = (0..<results.count).compactMap { collected[$0] }
+                self.parent.onPicked(ordered)
+            }
+        }
+    }
 }

@@ -317,20 +317,13 @@ struct HeaderLogo: View {
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        Group {
-            if #available(iOS 15.0, *) {
-                AsyncImage(url: URL(string: url)) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fit)
-                    default:
-                        fallback
-                    }
-                }
-            } else {
-                fallback
-            }
-        }
+        CachedAsyncImage(
+            url: URL(string: url),
+            content: { image in
+                image.resizable().aspectRatio(contentMode: .fit)
+            },
+            placeholder: { fallback }
+        )
         .frame(width: 32, height: 32)
         .background(colors.headerPrimaryText.opacity(0.15))
         .clipShape(Circle())

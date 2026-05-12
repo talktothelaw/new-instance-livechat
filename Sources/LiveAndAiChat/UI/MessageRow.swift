@@ -369,27 +369,21 @@ struct ImageBubble: View {
             .onTapGesture { onTap(attachment) }
     }
 
-    @ViewBuilder
     private var imageContent: some View {
-        if #available(iOS 15.0, *) {
-            AsyncImage(url: URL(string: attachment.url)) { phase in
-                switch phase {
-                case .empty:
-                    loadingPlaceholder
-                case .failure:
-                    errorPlaceholder
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: cropToSquare ? .fill : .fit)
-                        .onAppear { onLoaded() }
-                @unknown default:
-                    loadingPlaceholder
-                }
-            }
-        } else {
-            loadingPlaceholder
-        }
+        // CachedAsyncImage hits the SDK's two-tier image cache before
+        // falling through to network. Repeated message-list renders
+        // (scroll, virtualisation pop) re-render from the in-memory
+        // tier with no flicker; second-launch renders hit the disk tier.
+        CachedAsyncImage(
+            url: URL(string: attachment.url),
+            onLoaded: { onLoaded() },
+            content: { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: cropToSquare ? .fill : .fit)
+            },
+            placeholder: { loadingPlaceholder }
+        )
     }
 
     private var loadingPlaceholder: some View {
@@ -402,15 +396,6 @@ struct ImageBubble: View {
         .frame(width: cropToSquare ? 110 : 220, height: cropToSquare ? 110 : 165)
     }
 
-    private var errorPlaceholder: some View {
-        ZStack {
-            colors.typingBg
-            Image(systemName: "photo")
-                .font(.system(size: 28))
-                .foregroundColor(colors.textSecondary)
-        }
-        .frame(width: cropToSquare ? 110 : 220, height: cropToSquare ? 110 : 165)
-    }
 }
 
 struct FileAttachmentRow: View {

@@ -335,20 +335,17 @@ struct AttachmentChip: View {
             )
         }
 
-        if #available(iOS 15.0, *) {
-            return AnyView(
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    default:
-                        Color.clear
-                    }
-                }
+        // Remote preview (post-upload) — goes through the cached image
+        // loader so the chip thumbnail doesn't re-fetch every render.
+        return AnyView(
+            CachedAsyncImage(
+                url: url,
+                content: { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                },
+                placeholder: { Color.clear }
             )
-        }
-
-        return nil
+        )
     }
 }
 
