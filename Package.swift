@@ -3,23 +3,34 @@
 import PackageDescription
 
 let package = Package(
-    name: "NISDK",
+    name: "LiveAndAiChat",
     platforms: [
-        .iOS(.v13)
+        // iOS 14 baseline: NWPathMonitor (iOS 12+), URLSessionWebSocketTask
+        // (iOS 13+), Combine ObservableObject support is widest from 14
+        // onwards, and gives us AsyncImage-friendly SwiftUI in Phase 2.B
+        // without a backport library.
+        .iOS(.v14),
+        // macOS support is declared so `swift build` (which targets the
+        // host on a Mac) compiles cleanly against the same APIs the iOS
+        // target uses. Big Sur (11) has NWPathMonitor + URLSessionWebSocket
+        // + OSLog at the minimum versions needed.
+        .macOS(.v11),
     ],
     products: [
         .library(
-            name: "NISDK",
-            targets: ["NISDK"]
+            name: "LiveAndAiChat",
+            targets: ["LiveAndAiChat"]
         ),
     ],
     targets: [
         .target(
-            name: "NISDK"
+            name: "LiveAndAiChat",
+            path: "Sources/LiveAndAiChat"
         ),
         .testTarget(
-            name: "NISDKTests",
-            dependencies: ["NISDK"]
+            name: "LiveAndAiChatTests",
+            dependencies: ["LiveAndAiChat"],
+            path: "Tests/LiveAndAiChatTests"
         ),
     ]
 )
