@@ -61,18 +61,20 @@ struct Composer: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!enabled)
+                    .accessibilityLabel("Attach file")
+                    .accessibilityHint("Opens a chooser for a photo or document to attach")
                 }
                 ZStack(alignment: .topLeading) {
                     if text.isEmpty {
                         Text(placeholderText)
                             .foregroundColor(colors.inputPlaceholder)
-                            .font(.system(size: 14))
+                            .font(.body)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
                             .allowsHitTesting(false)
                     }
                     TextEditor(text: $text)
-                        .font(.system(size: 14))
+                        .font(.body)
                         .foregroundColor(colors.inputText)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -115,7 +117,14 @@ struct Composer: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
         }
-        .background(colors.footerContainer.ignoresSafeArea(edges: .bottom))
+        // Only ignore the container safe area (home-indicator gutter)
+        // — NOT the keyboard. Plain `.ignoresSafeArea(edges: .bottom)`
+        // can swallow the keyboard inset on some iOS versions, leaving
+        // a white strip where the composer ends up jammed against the
+        // keyboard. `.container` confines the extension to the system
+        // chrome only, so the composer auto-avoids the keyboard
+        // cleanly.
+        .background(colors.footerContainer.ignoresSafeArea(.container, edges: .bottom))
     }
 
     /// Compose-time height for the input rounded rect. Matches the web's
@@ -197,12 +206,12 @@ struct AttachmentChip: View {
         VStack(spacing: 4) {
             thumbContainer
             Text(displayName)
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundColor(item.status == .failed ? colors.errorColor : colors.textSecondary)
                 .lineLimit(1)
                 .frame(width: 64)
             Text(subline)
-                .font(.system(size: 9))
+                .font(.caption2)
                 .foregroundColor(colors.textSecondary.opacity(0.7))
                 .lineLimit(1)
                 .frame(width: 64)

@@ -95,8 +95,56 @@ public struct ChatColors: Equatable {
         warningColor: hex("#F59E0B")
     )
 
+    /// Spec-default dark palette. Used when the merchant hasn't shipped
+    /// an explicit `appearance` config and the iOS system is in dark
+    /// mode. Mirrors the light palette inversion: deep neutral grays
+    /// for backgrounds, brand purple slightly desaturated to reduce
+    /// eye strain at low ambient brightness, near-white text.
+    public static let darkDefault: ChatColors = ChatColors(
+        primary: hex("#A855F7"),
+        background: hex("#0F0F14"),
+        text: hex("#F3F4F6"),
+        textSecondary: hex("#9CA3AF"),
+        border: hex("#374151"),
+        inputBg: hex("#1F2937"),
+        inputBorder: hex("#374151"),
+        inputText: hex("#F3F4F6"),
+        inputPlaceholder: hex("#6B7280"),
+        headerBackground: hex("#7E22CE"),
+        headerPrimaryText: .white,
+        headerSecondaryText: hex("#E9D5FF"),
+        headerIcon: .white,
+        closeButton: .white,
+        sentBubble: hex("#9333EA"),
+        sentText: .white,
+        sentTimestamp: hex("#E9D5FF"),
+        receivedBubble: hex("#1F2937"),
+        receivedText: hex("#F3F4F6"),
+        receivedTimestamp: hex("#9CA3AF"),
+        systemMessageText: hex("#9CA3AF"),
+        daySeparatorBg: hex("#3B0764"),
+        daySeparatorText: hex("#D8B4FE"),
+        footerContainer: hex("#111827"),
+        sendButtonBg: hex("#A855F7"),
+        sendButtonIcon: .white,
+        attachmentButton: hex("#9CA3AF"),
+        typingBg: hex("#1F2937"),
+        typingDot: hex("#9CA3AF"),
+        unreadBadgeBg: hex("#A855F7"),
+        unreadBadgeText: .white,
+        scrollToBottomBg: hex("#A855F7"),
+        scrollToBottomIcon: .white,
+        onlineStatus: hex("#34D399"),
+        offlineStatus: hex("#6B7280"),
+        errorColor: hex("#F87171"),
+        successColor: hex("#34D399"),
+        warningColor: hex("#FBBF24")
+    )
+
     /// Build a palette from the server-provided appearance object. When
-    /// `appearance` is nil we return ``lightDefault``.
+    /// `appearance` is nil we return ``lightDefault`` — callers in dark
+    /// mode should use ``from(_:colorScheme:)`` instead to get the
+    /// dark fallback.
     public static func from(_ appearance: OrgAppearance?) -> ChatColors {
         guard let a = appearance else { return .lightDefault }
         let c = a.colors
@@ -140,6 +188,17 @@ public struct ChatColors: Equatable {
             successColor: hex(c.success),
             warningColor: hex(c.warning)
         )
+    }
+
+    /// Colour-scheme-aware factory. Picks `lightDefault` / `darkDefault`
+    /// based on the system's current `colorScheme` when the merchant
+    /// hasn't shipped an explicit `appearance` config. Pass-through
+    /// otherwise (merchant config wins regardless of system mode).
+    public static func from(_ appearance: OrgAppearance?, colorScheme: ColorScheme) -> ChatColors {
+        if appearance == nil {
+            return colorScheme == .dark ? .darkDefault : .lightDefault
+        }
+        return from(appearance)
     }
 
     /// Lenient hex parser — `#RRGGBB` or `#AARRGGBB`. Returns black on

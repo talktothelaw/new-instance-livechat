@@ -204,13 +204,40 @@ public final class LiveAndAiChat: ObservableObject {
     /// send button consumes the queue.
     public func sendMessage(_ content: String) {
         precondition(!destroyed, "SDK has been destroyed")
-        guard let convId = session.conversationId else {
-            emitError(LiveAndAiChatError(type: .validation, message: "No active conversation", recoverable: true))
-            return
-        }
         let drained = attachmentQueue.drainUploaded()
         let clientId = "c_\(UUID().uuidString)"
         let optimisticId = "temp_\(clientId)"
+        #if canImport(UIKit)
+        Haptics.send()
+        #endif
+
+        // No active conversation (e.g. agent closed it before this
+        // send, the `csConversationUpdated` handler wiped pointers).
+        // Don't surface "No active conversation" to the user — show
+        // the optimistic bubble and run the same recover-and-resend
+        // flow we use when the send itself fails closed.
+        guard let convId = session.conversationId else {
+            let optimistic = ChatMessage(
+                id: optimisticId,
+                clientId: clientId,
+                conversationId: "",
+                content: content,
+                type: .customer,
+                status: .sent,
+                attachments: drained
+            )
+            store.mergeMessage(optimistic)
+            Task { [weak self] in
+                await self?.recoverFromClosedAndResend(
+                    content: content,
+                    clientId: clientId,
+                    optimisticId: optimisticId,
+                    attachments: drained
+                )
+            }
+            return
+        }
+
         let optimistic = ChatMessage(
             id: optimisticId,
             clientId: clientId,
@@ -310,6 +337,9 @@ public final class LiveAndAiChat: ObservableObject {
               msg.type == .customer,
               msg.status == .failed
         else { return }
+        #if canImport(UIKit)
+        Haptics.confirm()
+        #endif
         let cid = msg.clientId ?? "c_\(UUID().uuidString)"
         store.updateMessage(messageId: messageId) { existing in
             ChatMessage(
@@ -341,6 +371,9 @@ public final class LiveAndAiChat: ObservableObject {
     public func requestHandoff(reason: String? = nil) {
         precondition(!destroyed, "SDK has been destroyed")
         guard let convId = session.conversationId else { return }
+        #if canImport(UIKit)
+        Haptics.confirm()
+        #endif
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -627,6 +660,11 @@ public final class LiveAndAiChat: ObservableObject {
             if inbound && soundsOn {
                 NotificationTone.shared.play()
             }
+            #if canImport(UIKit)
+            if inbound {
+                Haptics.inbound()
+            }
+            #endif
         }
         .store(in: &subscriptionCancellables)
 
@@ -661,6 +699,24 @@ public final class LiveAndAiChat: ObservableObject {
                   let conv = try? GqlClient.decode(Conversation.self, from: node)
             else { return }
             self.store.setConversation(conv, assignment: self.store.assignment)
+            // When the agent (or backend automation) closes the
+            // conversation server-side, the next outbound message MUST
+            // start a brand-new session — otherwise the SDK would retry
+            // on a dead thread, or try to "resume" something the
+            // customer can no longer see. Wipe the persisted pointers
+            // and reset lifecycle here so the next `sendMessage`
+            // (or the auto-resend inside `recoverFromClosedAndResend`)
+            // triggers a fresh `initCsAiChat`. Mirrors Android.
+            if conv.status == .closed || conv.status == .resolved {
+                SseLog.debug("conversation \(conv.id.suffix(8)) ended (\(conv.status.rawValue)) — clearing session for next-message restart")
+                self.session.conversationId = nil
+                self.session.assignmentId = nil
+                self.subscriptionClient?.stop()
+                self.subscriptionClient = nil
+                self.subscriptionCancellables.removeAll()
+                self.connectionSubscription = nil
+                self.lifecycle = .notStarted
+            }
         }
         .store(in: &subscriptionCancellables)
 
@@ -684,6 +740,73 @@ public final class LiveAndAiChat: ObservableObject {
         client.subscribe(SubscriptionRequest(query: Operations.subHeartbeat))
             .sink { _ in /* no-op */ }
             .store(in: &subscriptionCancellables)
+    }
+
+    /// The agent closed the conversation while the customer was still
+    /// typing. Mirrors Android's `recoverFromClosedAndResend`:
+    ///
+    ///   1. Drop the optimistic message — it never reached the server.
+    ///   2. Wipe the saved conversationId / assignmentId pointers (the
+    ///      conversation is dead; further requests against it just
+    ///      error out).
+    ///   3. Stop the dead subscription stream so transports tied to
+    ///      the closed conv don't leak.
+    ///   4. Reset the SDK lifecycle so `runInit()` runs a brand-new
+    ///      `initCsAiChat`. Reuses the host-supplied `ChatUser`, so no
+    ///      identity-collection step is needed.
+    ///   5. After init, resend the exact same content with the same
+    ///      `clientId`. The new conversation absorbs it; the agent
+    ///      sees the message in a fresh thread.
+    private func recoverFromClosedAndResend(
+        content: String,
+        clientId: String,
+        optimisticId: String,
+        attachments: [MessageAttachment]
+    ) async {
+        await MainActor.run {
+            // (1) drop the optimistic entry so the user doesn't stare
+            //     at a "sent" bubble that never reached anybody.
+            self.store.removeMessage(optimisticId)
+            // (2) wipe the dead conversation pointers.
+            self.session.conversationId = nil
+            self.session.assignmentId = nil
+            // (3) stop subscriptions tied to the dead convId.
+            self.subscriptionClient?.stop()
+            self.subscriptionClient = nil
+            self.subscriptionCancellables.removeAll()
+            self.connectionSubscription = nil
+            // (4) reset lifecycle; nil-out the in-flight init task so
+            //     `runInit()` runs again.
+            self.initTask = nil
+            self.lifecycle = .notStarted
+        }
+        // Run a fresh init. This re-bootstraps and creates a new conv.
+        await runInit()
+        guard let newConvId = await MainActor.run(body: { self.session.conversationId }) else {
+            SseLog.warn("send-recover · re-init did not produce a conversationId; aborting resend")
+            return
+        }
+        // (5) resend with the same clientId so any echo merges with the
+        //     new optimistic row instead of duplicating.
+        await MainActor.run {
+            let newOptimistic = ChatMessage(
+                id: "temp_\(clientId)",
+                clientId: clientId,
+                conversationId: newConvId,
+                content: content,
+                type: .customer,
+                status: .sent,
+                attachments: attachments
+            )
+            self.store.mergeMessage(newOptimistic)
+        }
+        await runSendMutation(
+            convId: newConvId,
+            content: content,
+            attachments: attachments,
+            clientId: clientId,
+            optimisticId: "temp_\(clientId)"
+        )
     }
 
     private func runSendMutation(
@@ -726,6 +849,19 @@ public final class LiveAndAiChat: ObservableObject {
                 }
             }
         } catch let e as LiveAndAiChatError {
+            if e.conversationClosed {
+                // Agent closed the chat after the customer hit send.
+                // Restart on a fresh conversation and resend with the
+                // SAME `clientId` so any optimistic echo de-dupes.
+                SseLog.debug("send · conversation closed — restarting chat and resending")
+                await recoverFromClosedAndResend(
+                    content: content,
+                    clientId: clientId,
+                    optimisticId: optimisticId,
+                    attachments: attachments
+                )
+                return
+            }
             await MainActor.run {
                 self.store.updateMessage(messageId: optimisticId) { msg in
                     ChatMessage(
@@ -743,6 +879,9 @@ public final class LiveAndAiChat: ObservableObject {
                     )
                 }
                 self.emitError(e)
+                #if canImport(UIKit)
+                Haptics.failure()
+                #endif
             }
         } catch {
             let e = LiveAndAiChatError(type: .system, message: error.localizedDescription, recoverable: true, underlying: error)
@@ -756,6 +895,9 @@ public final class LiveAndAiChat: ObservableObject {
                     )
                 }
                 self.emitError(e)
+                #if canImport(UIKit)
+                Haptics.failure()
+                #endif
             }
         }
     }

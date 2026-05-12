@@ -33,9 +33,10 @@ struct MessageRow: View {
         return VStack(alignment: isCustomer ? .trailing : .leading, spacing: 4) {
             if !isCustomer, let label = senderLabel {
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundColor(colors.textSecondary)
                     .padding(.leading, 4)
+                    .accessibilityHidden(true)  // rolled into the bubble's label
             }
             if hasContent {
                 TextBubble(message: message, isCustomer: isCustomer)
@@ -55,18 +56,60 @@ struct MessageRow: View {
                 Button { onRetry(message.id) } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                         Text("Failed · tap to retry")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11))
+                            .font(.caption2)
                     }
                     .foregroundColor(colors.errorColor)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Message failed to send")
+                .accessibilityHint("Double-tap to retry")
             }
         }
         .frame(maxWidth: .infinity, alignment: isCustomer ? .trailing : .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    /// Single VoiceOver utterance per message row. Combines sender,
+    /// content, attachments and status so the user hears the row as
+    /// one logical unit rather than as a half-dozen disjoint Texts.
+    private var accessibilitySummary: String {
+        var parts: [String] = []
+        switch message.type {
+        case .customer: parts.append("You said:")
+        case .agent:    parts.append("\(message.sender?.senderName ?? "Agent") said:")
+        case .ai:       parts.append("AI assistant said:")
+        case .system:   parts.append("System message:")
+        }
+        if !message.content.isEmpty {
+            parts.append(message.content)
+        }
+        if !message.attachments.isEmpty {
+            let imgs = message.attachments.filter { MessageRowHelpers.isImage($0) }.count
+            let files = message.attachments.count - imgs
+            if imgs > 0 {
+                parts.append("\(imgs) photo\(imgs == 1 ? "" : "s") attached")
+            }
+            if files > 0 {
+                parts.append("\(files) file\(files == 1 ? "" : "s") attached")
+            }
+        }
+        if let ts = MessageRowHelpers.formatTimestamp(message.createdAt) {
+            parts.append("at \(ts)")
+        }
+        if message.type == .customer {
+            switch message.status {
+            case .failed:    parts.append("Failed to send")
+            case .read:      parts.append("Read")
+            case .delivered: parts.append("Delivered")
+            case .sent:      parts.append("Sent")
+            }
+        }
+        return parts.joined(separator: " ")
     }
 
     private var senderLabel: String? {
@@ -91,7 +134,8 @@ private struct SystemMessageRow: View {
         HStack {
             Spacer(minLength: 0)
             Text(content)
-                .font(.system(size: 12).italic())
+                .font(.footnote)
+                .italic()
                 .foregroundColor(colors.systemMessageText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
@@ -110,8 +154,10 @@ private struct TextBubble: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(message.content)
+                .font(.body)
                 .foregroundColor(foregroundColor)
                 .frame(maxWidth: 280, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             BubbleFooter(message: message, isCustomer: isCustomer)
                 .environment(\.chatColors, colors)
         }
@@ -156,7 +202,7 @@ private struct BubbleFooter: View {
             HStack(spacing: 4) {
                 if let ts = MessageRowHelpers.formatTimestamp(message.createdAt) {
                     Text(ts)
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(timestampColor)
                 }
                 if isCustomer {
@@ -175,19 +221,19 @@ private struct BubbleFooter: View {
         switch message.status {
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9))
+                .font(.caption2)
                 .foregroundColor(colors.errorColor)
         case .sent:
             Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(timestampColor)
         case .delivered:
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(timestampColor)
         case .read:
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(colors.successColor)
         }
     }
@@ -340,7 +386,7 @@ struct ImageGrid: View {
             if showOverflow {
                 Color.black.opacity(0.55)
                 Text("+\(overflow)")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.headline)
                     .foregroundColor(.white)
             }
         }
@@ -367,6 +413,10 @@ struct ImageBubble: View {
             .clipShape(RoundedCorners(tl: 12, tr: 12, bl: 12, br: 12))
             .contentShape(Rectangle())
             .onTapGesture { onTap(attachment) }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Photo: \(attachment.name)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Double-tap to view full screen")
     }
 
     private var imageContent: some View {
@@ -429,12 +479,12 @@ struct FileAttachmentRow: View {
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text(attachment.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundColor(pillText)
                     .lineLimit(1)
                 if attachment.size > 0 {
                     Text(MessageRowHelpers.formatBytes(attachment.size))
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundColor(pillText.opacity(0.7))
                 }
             }
@@ -452,6 +502,10 @@ struct FileAttachmentRow: View {
                 UIApplication.shared.open(url)
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(isPdf ? "PDF" : "File"): \(attachment.name)" + (attachment.size > 0 ? ", \(MessageRowHelpers.formatBytes(attachment.size))" : ""))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Double-tap to open")
     }
 }
 
@@ -554,7 +608,7 @@ struct DaySeparator: View {
         HStack {
             Spacer()
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(.caption2.weight(.medium))
                 .foregroundColor(colors.daySeparatorText)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -562,6 +616,8 @@ struct DaySeparator: View {
             Spacer()
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Messages from \(label)")
     }
 }
 

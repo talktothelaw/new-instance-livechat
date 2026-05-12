@@ -71,6 +71,17 @@ final class GqlClient {
             let first = errors[0]
             let extensions = first["extensions"] as? [String: Any]
             let code = extensions?["code"] as? String
+            // Server flag emitted on every mutation against a closed
+            // conversation. The SDK uses it to silently restart the
+            // chat and resend (see `LiveAndAiChat.recoverFromClosedAndResend`).
+            let conversationClosed: Bool
+            if let bool = extensions?["conversationClosed"] as? Bool {
+                conversationClosed = bool
+            } else if let str = extensions?["conversationClosed"] as? String {
+                conversationClosed = str.lowercased() == "true"
+            } else {
+                conversationClosed = false
+            }
             let message = (first["message"] as? String) ?? "GraphQL error"
             let type: ChatErrorType
             switch code {
@@ -87,7 +98,8 @@ final class GqlClient {
                 type: type,
                 message: message,
                 recoverable: type != .auth,
-                code: code
+                code: code,
+                conversationClosed: conversationClosed
             )
         }
 

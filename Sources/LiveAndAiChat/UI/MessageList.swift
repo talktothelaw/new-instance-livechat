@@ -22,6 +22,7 @@ struct MessageList: View {
     let onRetry: (String) -> Void
     let onImageTap: (MessageAttachment) -> Void
     @Environment(\.chatColors) private var colors
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var seenIds: Set<String> = []
     @State private var initialised = false
@@ -89,7 +90,11 @@ struct MessageList: View {
                     if seenIds.contains(id) { return }
                     if !userScrolledAway {
                         seenIds.insert(id)
-                        withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+                        if reduceMotion {
+                            proxy.scrollTo(id, anchor: .bottom)
+                        } else {
+                            withAnimation { proxy.scrollTo(id, anchor: .bottom) }
+                        }
                     }
                 }
                 .onChange(of: imageLoadTick) { _ in
@@ -220,9 +225,9 @@ struct ScrollToBottomPill: View {
         Button(action: onTap) {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.caption.weight(.semibold))
                 Text(count > 1 ? "New messages (\(count))" : "New messages")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.footnote.weight(.medium))
             }
             .foregroundColor(colors.scrollToBottomIcon)
             .padding(.horizontal, 12)
@@ -231,11 +236,18 @@ struct ScrollToBottomPill: View {
             .shadow(color: Color.black.opacity(0.15), radius: 6, y: 2)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(
+            count > 1
+                ? "\(count) new messages"
+                : "1 new message"
+        )
+        .accessibilityHint("Double-tap to scroll to the latest message")
     }
 }
 
 struct TypingIndicator: View {
     @Environment(\.chatColors) private var colors
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var phase: Double = 0
 
     var body: some View {
@@ -244,7 +256,11 @@ struct TypingIndicator: View {
                 Circle()
                     .fill(colors.typingDot)
                     .frame(width: 6, height: 6)
-                    .scaleEffect(scaleFor(index: i))
+                    .scaleEffect(reduceMotion ? 1 : scaleFor(index: i))
+                    // Static dots get a subtle opacity gradient instead
+                    // of the scale pulse so the indicator still reads
+                    // as "agent is typing" without motion.
+                    .opacity(reduceMotion ? 0.5 + Double(i) * 0.2 : 1)
             }
         }
         .padding(.horizontal, 12)
@@ -252,10 +268,15 @@ struct TypingIndicator: View {
         .background(Capsule().fill(colors.typingBg))
         .padding(.leading, 4)
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                phase = 1
+            if !reduceMotion {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                    phase = 1
+                }
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Agent is typing")
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private func scaleFor(index: Int) -> CGFloat {

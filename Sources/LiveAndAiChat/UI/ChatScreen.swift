@@ -23,6 +23,7 @@ public struct ChatScreen: View {
     let onPickFile: () -> Void
 
     @State private var viewerAttachment: MessageAttachment?
+    @Environment(\.colorScheme) private var systemColorScheme
 
     public init(
         sdk: LiveAndAiChat,
@@ -37,7 +38,7 @@ public struct ChatScreen: View {
     }
 
     public var body: some View {
-        let colors = ChatColors.from(sdk.orgConfig?.appearance)
+        let colors = ChatColors.from(sdk.orgConfig?.appearance, colorScheme: systemColorScheme)
         let companyName = sdk.orgConfig?.branding.companyName ?? ""
         let title = store.conversation?.assignedAgentName
             ?? (companyName.isEmpty ? "Chat" : companyName)
@@ -96,7 +97,14 @@ public struct ChatScreen: View {
                     : "Type a message",
                 pendingAttachments: attachmentQueue.items,
                 attachmentsAllowed: attachmentsAllowed,
-                enabled: sdk.lifecycle == .ready,
+                // Composer stays usable when the conversation has ended
+                // — sending in that state runs recoverFromClosedAndResend
+                // server-side, which silently starts a fresh chat with
+                // the customer's message as the first one. (Matches
+                // Android.) Only `.unavailable` truly blocks input.
+                enabled: sdk.lifecycle == .ready
+                    || sdk.lifecycle == .notStarted
+                    || store.flowState == .ended,
                 onPickFile: onPickFile,
                 onRemoveAttachment: { attachmentQueue.remove(id: $0) },
                 onSend: { sdk.sendMessage($0) },
@@ -106,7 +114,15 @@ public struct ChatScreen: View {
             )
             .environment(\.chatColors, colors)
         }
-        .background(colors.background.ignoresSafeArea(edges: .bottom))
+        // Clamp to a readable column width on iPad / landscape / wide
+        // splits (≤ 640pt). On iPhone portrait this is a no-op because
+        // the screen is already narrower. The outer HStack centres the
+        // clamped content and fills the side gutters with the chat
+        // background colour so the header / composer still appear
+        // edge-to-edge inside the column.
+        .frame(maxWidth: 640)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .background(colors.background.ignoresSafeArea(.container, edges: .bottom))
         .fullScreenCover(item: $viewerAttachment) { att in
             ImageViewerView(attachment: att, onClose: { viewerAttachment = nil })
         }
@@ -221,7 +237,7 @@ struct ChatHeader: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(ChatHeader.titleCase(title))
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.headline)
                     .foregroundColor(colors.headerPrimaryText)
                     .lineLimit(1)
                 if !subtitle.isEmpty {
@@ -239,17 +255,20 @@ struct ChatHeader: View {
                                     .frame(width: 6, height: 6)
                             }
                             .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)  // subtitle text conveys this
                         }
                         if let iconName = subtitleIconName {
                             Image(systemName: iconName)
-                                .font(.system(size: 10, weight: .medium))
+                                .font(.caption2.weight(.medium))
                                 .foregroundColor(colors.headerSecondaryText)
+                                .accessibilityHidden(true)
                         }
                         Text(ChatHeader.titleCase(subtitle))
-                            .font(.system(size: 11))
+                            .font(.caption2)
                             .foregroundColor(colors.headerSecondaryText)
                             .lineLimit(1)
                     }
+                    .accessibilityElement(children: .combine)
                 }
             }
             Spacer(minLength: 8)
@@ -359,7 +378,7 @@ struct SystemNoticeBlock: View {
                     .foregroundColor(colors.textSecondary)
             }
             Text(text)
-                .font(.system(size: 14))
+                .font(.callout)
                 .foregroundColor(colors.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -367,9 +386,9 @@ struct SystemNoticeBlock: View {
                 Button(action: action) {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.footnote.weight(.semibold))
                         Text(label)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.footnote.weight(.semibold))
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 9)
@@ -399,7 +418,7 @@ struct ConnectingPlaceholder: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: colors.primary))
             Text(text)
-                .font(.system(size: 13))
+                .font(.footnote)
                 .foregroundColor(colors.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
@@ -415,7 +434,7 @@ struct ConnectionBanner: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 12))
+            .font(.caption)
             .foregroundColor(colors.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
@@ -431,14 +450,16 @@ struct EmptyState: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("AI")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundColor(colors.textSecondary)
                 .padding(.leading, 4)
             HStack {
                 Text(welcomeMessage)
+                    .font(.body)
                     .foregroundColor(colors.receivedText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                    .fixedSize(horizontal: false, vertical: true)
                     .background(
                         RoundedCorners(tl: 16, tr: 16, bl: 4, br: 16)
                             .fill(colors.receivedBubble)
