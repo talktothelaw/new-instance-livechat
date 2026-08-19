@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 import OSLog
 
 /// Public entry point for the LiveAndAiChat iOS SDK. Mirrors the Android

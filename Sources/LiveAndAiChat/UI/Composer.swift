@@ -326,6 +326,7 @@ struct AttachmentChip: View {
         case .uploading: return "\(Int(item.progress * 100))%"
         case .uploaded: return MessageRowHelpers.formatBytes(item.size)
         case .failed: return item.errorReason ?? "Failed"
+        case .cancelled: return "Cancelled"
         }
     }
 

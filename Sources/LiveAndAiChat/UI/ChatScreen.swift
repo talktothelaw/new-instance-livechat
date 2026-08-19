@@ -92,10 +92,6 @@ public struct ChatScreen: View {
             .frame(maxHeight: .infinity)
 
             Composer(
-                text: Binding(
-                    get: { sdk.draftText },
-                    set: { sdk.updateDraft($0) }
-                ),
                 placeholderText: sdk.orgConfig?.settings.placeholderText.isEmpty == false
                     ? sdk.orgConfig!.settings.placeholderText
                     : "Type a message",
@@ -114,7 +110,11 @@ public struct ChatScreen: View {
                 onSend: { sdk.sendMessage($0) },
                 onTyping: { typing in
                     if typing { sdk.sendTypingStart() } else { sdk.sendTypingStop() }
-                }
+                },
+                text: Binding(
+                    get: { sdk.draftText },
+                    set: { sdk.updateDraft($0) }
+                )
             )
             .environment(\.chatColors, colors)
         }
