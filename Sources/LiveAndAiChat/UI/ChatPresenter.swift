@@ -19,12 +19,15 @@ public extension LiveAndAiChat {
     /// to dismiss; no external dismissal hook is required.
     @MainActor
     func present(from host: UIViewController) {
-        precondition(host.presentedViewController == nil, "Host already has a presented view controller.")
+        var top = host
+        while let presented = top.presentedViewController { top = presented }
         let presenter = ChatPresentingController(sdk: self)
         presenter.modalPresentationStyle = .fullScreen
-        host.present(presenter, animated: true) { [weak self] in
+        presentedChatController = presenter
+        top.present(presenter, animated: true) { [weak self] in
             self?.openChat()
         }
+        presenter.presentationController?.delegate = presenter
     }
 }
 
@@ -32,9 +35,10 @@ public extension LiveAndAiChat {
 /// `UIDocumentPickerViewController` we hand off to for file picking.
 /// Lives only as long as the chat is on screen.
 @MainActor
-final class ChatPresentingController: UIViewController {
+final class ChatPresentingController: UIViewController, UIAdaptivePresentationControllerDelegate {
     private let sdk: LiveAndAiChat
     private var hosting: UIHostingController<AnyView>!
+    private var dismissalHandled = false
 
     init(sdk: LiveAndAiChat) {
         self.sdk = sdk
@@ -48,8 +52,10 @@ final class ChatPresentingController: UIViewController {
         let screen = ChatScreen(
             sdk: sdk,
             onClose: { [weak self] in
-                self?.sdk.closeChat()
-                self?.dismiss(animated: true)
+                guard let self else { return }
+                self.dismissalHandled = true
+                self.sdk.markClosed(reason: .closeButton, initiator: .user)
+                self.dismiss(animated: true)
             },
             onPickFile: { [weak self] in
                 self?.presentDocumentPicker()
@@ -67,6 +73,19 @@ final class ChatPresentingController: UIViewController {
         ])
         host.didMove(toParent: self)
         self.hosting = host
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        dismissalHandled = true
+        sdk.markClosed(reason: .gesture, initiator: .user)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if (isBeingDismissed || isMovingFromParent || presentingViewController == nil), !dismissalHandled {
+            dismissalHandled = true
+            sdk.markClosed(reason: .hostNavigation, initiator: .host)
+        }
     }
 
     private func presentDocumentPicker() {

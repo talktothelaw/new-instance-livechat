@@ -90,11 +90,20 @@ public final class LiveAndAiChat: ObservableObject {
     public var assignment: Assignment? { store.assignment }
     public var agentTyping: Bool { store.agentTyping }
     public var unreadCount: Int { store.unreadCount }
+    public var draftText: String { store.draftText }
+
+    public func updateDraft(_ text: String) {
+        store.updateDraft(text)
+    }
     public var widgetOpen: Bool { store.widgetOpen }
 
     // MARK: - Delegate
 
     private let delegates = NSHashTable<AnyObject>.weakObjects()
+    private var uploadTasks: [String: Task<Void, Never>] = [:]
+    private let closeGuard = CloseEmissionGuard()
+    private var unreadCancellable: AnyCancellable?
+    weak var presentedChatController: AnyObject?
 
     public func addDelegate(_ delegate: any LiveAndAiChatDelegate) {
         delegates.add(delegate as AnyObject)
@@ -112,6 +121,9 @@ public final class LiveAndAiChat: ObservableObject {
     private func emitSent(_ message: ChatMessage) { forEachDelegate { $0.didSendMessage(message) } }
     private func emitTyping(_ value: Bool) { forEachDelegate { $0.agentTypingDidChange(value) } }
     private func emitConnection(_ state: ConnectionState) { forEachDelegate { $0.connectionStateDidChange(state) } }
+    private func emitUnread(_ count: Int) { forEachDelegate { $0.unreadCountDidChange(count) } }
+    private func emitAttachment(_ attachment: QueuedAttachment) { forEachDelegate { $0.attachmentDidUpdate(attachment) } }
+    private func emitChatClosed(_ event: ChatCloseEvent) { forEachDelegate { $0.chatDidClose(event) } }
     private func emitError(_ error: LiveAndAiChatError) { forEachDelegate { $0.didEncounterError(error) } }
 
     // MARK: - Init
@@ -125,6 +137,11 @@ public final class LiveAndAiChat: ObservableObject {
         self.attachmentQueue = AttachmentQueue()
         self.uploader = FileUploader(gql: GqlClient(endpoint: config.gqlEndpoint, apiKey: config.effectiveApiKey))
         self.networkMonitor = NetworkMonitor()
+
+        unreadCancellable = store.$unreadCount
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] count in self?.emitUnread(count) }
 
         // Track underlying store changes so this ObservableObject
         // republishes when its read-through properties move.
@@ -182,6 +199,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// marking the widget as in-foreground.
     public func openChat() {
         precondition(!destroyed, "SDK has been destroyed")
+        closeGuard.arm()
         store.openWidget()
         if opened { return }
         opened = true
@@ -191,7 +209,37 @@ public final class LiveAndAiChat: ObservableObject {
     }
 
     public func closeChat() {
+        markClosed(reason: .programmatic, initiator: .host)
+        #if canImport(UIKit)
+        Task { @MainActor in
+            (self.presentedChatController as? UIViewController)?.dismiss(animated: true)
+            self.presentedChatController = nil
+        }
+        #endif
+    }
+
+    func markClosed(reason: ChatCloseReason, initiator: ChatCloseInitiator) {
+        let previousState = store.flowState.rawValue
+        let unread = store.unreadCount
+        let shouldEmit = closeGuard.tryClaim()
         store.closeWidget()
+        opened = false
+        if !shouldEmit { return }
+        let pending = attachmentQueue.items.filter { $0.status == .queued || $0.status == .uploading }.count
+        let event = ChatCloseEvent(
+            reason: reason,
+            initiator: initiator,
+            timestamp: Int64(Date().timeIntervalSince1970 * 1000),
+            conversationId: session.conversationId ?? store.conversation?.id,
+            assignmentId: session.assignmentId,
+            channel: "native",
+            previousState: previousState,
+            unreadCount: unread,
+            hasDraft: !store.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            pendingAttachmentCount: pending,
+            metadata: ["sdkVersion": Self.version, "platform": "ios"]
+        )
+        emitChatClosed(event)
     }
 
     /// Send a customer text message. Optimistic insert, then awaits the
@@ -261,64 +309,124 @@ public final class LiveAndAiChat: ObservableObject {
 
     /// Queue a file for upload and (if successful) inclusion in the next
     /// outgoing message. Mirrors Android's `attach()` API.
-    public func attachFile(data: Data, name: String, mimeType: String, previewUri: String? = nil) {
-        precondition(!destroyed, "SDK has been destroyed")
-        let item = QueuedAttachment(
-            name: name,
-            mimeType: mimeType,
-            size: Int64(data.count),
-            status: .uploading,
-            progress: 0,
+    @discardableResult
+    public func attachFile(data: Data, name: String, mimeType: String, previewUri: String? = nil) -> String {
+        attach(
+            AttachmentRequest(source: .bytes(data), name: name, mimeType: mimeType),
             previewUri: previewUri
         )
+    }
+
+    @discardableResult
+    public func attach(_ request: AttachmentRequest, previewUri: String? = nil) -> String {
+        precondition(!destroyed, "SDK has been destroyed")
+        var previewHint = previewUri
+        if previewHint == nil, case let .filePath(path) = request.source { previewHint = path }
+        var item = QueuedAttachment(
+            name: request.name,
+            mimeType: request.mimeType ?? "",
+            size: request.declaredSize ?? 0,
+            status: .queued,
+            progress: 0,
+            previewUri: previewHint
+        )
+        item.metadata = request.metadata
         attachmentQueue.add(item)
-        Task { [weak self] in
+        emitAttachment(item)
+        let itemId = item.id
+        let allowRemote = config.allowRemoteAttachmentUrls
+        let task = Task { [weak self] in
             guard let self else { return }
             do {
+                let resolved = try await AttachmentSourceResolver.resolve(
+                    request: request,
+                    allowRemote: allowRemote,
+                    maxBytes: FileUploader.Constants.maxBytes,
+                    allowedMime: FileUploader.Constants.allowedMime
+                )
+                try Task.checkCancellation()
+                await MainActor.run {
+                    self.attachmentQueue.update(id: itemId) { existing in
+                        var copy = existing
+                        copy.status = .uploading
+                        copy.mimeType = resolved.mimeType
+                        copy.size = Int64(resolved.data.count)
+                        return copy
+                    }
+                    self.notifyAttachment(itemId)
+                }
                 let publicUrl = try await self.uploader.upload(
-                    data: data,
-                    name: name,
-                    mimeType: mimeType,
+                    data: resolved.data,
+                    name: resolved.name,
+                    mimeType: resolved.mimeType,
                     onProgress: { [weak self] progress in
                         Task { @MainActor in
-                            self?.attachmentQueue.update(id: item.id) { existing in
+                            self?.attachmentQueue.update(id: itemId) { existing in
                                 var copy = existing
                                 copy.progress = progress
                                 copy.status = .uploading
                                 return copy
                             }
+                            self?.notifyAttachment(itemId)
                         }
                     }
                 )
                 await MainActor.run {
-                    self.attachmentQueue.update(id: item.id) { existing in
+                    self.attachmentQueue.update(id: itemId) { existing in
                         var copy = existing
                         copy.status = .uploaded
                         copy.progress = 1.0
                         copy.publicUrl = publicUrl
                         return copy
                     }
+                    self.notifyAttachment(itemId)
+                    self.uploadTasks[itemId] = nil
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self.attachmentQueue.update(id: itemId) { existing in
+                        var copy = existing
+                        copy.status = .cancelled
+                        return copy
+                    }
+                    self.notifyAttachment(itemId)
+                    self.uploadTasks[itemId] = nil
                 }
             } catch let e as LiveAndAiChatError {
                 await MainActor.run {
-                    self.attachmentQueue.update(id: item.id) { existing in
+                    self.attachmentQueue.update(id: itemId) { existing in
                         var copy = existing
                         copy.status = .failed
                         copy.errorReason = e.message
                         return copy
                     }
+                    self.notifyAttachment(itemId)
                     self.emitError(e)
+                    self.uploadTasks[itemId] = nil
                 }
             } catch {
                 await MainActor.run {
-                    self.attachmentQueue.update(id: item.id) { existing in
+                    let wrapped = LiveAndAiChatError(type: .system, message: error.localizedDescription, recoverable: true)
+                    self.attachmentQueue.update(id: itemId) { existing in
                         var copy = existing
                         copy.status = .failed
-                        copy.errorReason = error.localizedDescription
+                        copy.errorReason = wrapped.message
                         return copy
                     }
+                    self.notifyAttachment(itemId)
+                    self.emitError(wrapped)
+                    self.uploadTasks[itemId] = nil
                 }
             }
+        }
+        uploadTasks[itemId] = task
+        return itemId
+    }
+
+    @MainActor
+    private func notifyAttachment(_ id: String) {
+        if let item = attachmentQueue.items.first(where: { $0.id == id }) {
+            emitAttachment(item)
         }
     }
 
@@ -326,7 +434,15 @@ public final class LiveAndAiChat: ObservableObject {
     /// call mid-upload — the upload still completes but the resulting
     /// public URL is dropped.
     public func removeAttachment(id: String) {
+        uploadTasks[id]?.cancel()
+        uploadTasks[id] = nil
         attachmentQueue.remove(id: id)
+    }
+
+    public func clearAttachments() {
+        for (_, task) in uploadTasks { task.cancel() }
+        uploadTasks.removeAll()
+        attachmentQueue.clear()
     }
 
     /// Retry a previously-failed customer message. Re-uses the same
@@ -414,6 +530,15 @@ public final class LiveAndAiChat: ObservableObject {
 
     public func destroy() {
         if destroyed { return }
+        markClosed(reason: .sessionEnded, initiator: .sdk)
+        #if canImport(UIKit)
+        Task { @MainActor in
+            (self.presentedChatController as? UIViewController)?.dismiss(animated: true)
+            self.presentedChatController = nil
+        }
+        #endif
+        for (_, task) in uploadTasks { task.cancel() }
+        uploadTasks.removeAll()
         destroyed = true
         opened = false
         initTask?.cancel()
@@ -911,7 +1036,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// the same `sdk.openChat()` pattern as on Android.
     @MainActor public static func current() -> LiveAndAiChat? { currentInstance }
 
-    public static let version = "0.1.0"
+    public static let version = "0.2.0"
 }
 
 /// Callback-style delegate alternative to Combine subscriptions. Optional
@@ -922,6 +1047,9 @@ public protocol LiveAndAiChatDelegate: AnyObject {
     func agentTypingDidChange(_ isTyping: Bool)
     func connectionStateDidChange(_ state: ConnectionState)
     func didEncounterError(_ error: LiveAndAiChatError)
+    func unreadCountDidChange(_ count: Int)
+    func attachmentDidUpdate(_ attachment: QueuedAttachment)
+    func chatDidClose(_ event: ChatCloseEvent)
 }
 
 // Default no-ops so adopters only implement what they care about.
@@ -931,4 +1059,7 @@ public extension LiveAndAiChatDelegate {
     func agentTypingDidChange(_ isTyping: Bool) {}
     func connectionStateDidChange(_ state: ConnectionState) {}
     func didEncounterError(_ error: LiveAndAiChatError) {}
+    func unreadCountDidChange(_ count: Int) {}
+    func attachmentDidUpdate(_ attachment: QueuedAttachment) {}
+    func chatDidClose(_ event: ChatCloseEvent) {}
 }

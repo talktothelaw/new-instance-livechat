@@ -5,6 +5,7 @@ public enum AttachmentStatus: String, Sendable {
     case queued
     case uploading
     case uploaded
+    case cancelled
     case failed
 }
 
@@ -22,6 +23,7 @@ public struct QueuedAttachment: Identifiable, Equatable, Sendable {
     /// file before the upload completes. The UI is free to use or
     /// ignore this hint.
     public var previewUri: String?
+    public var metadata: [String: String] = [:]
 
     public init(
         id: String = UUID().uuidString,

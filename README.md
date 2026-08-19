@@ -31,7 +31,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.1.0"),
+    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.2.0"),
 ],
 targets: [
     .target(
@@ -46,7 +46,7 @@ targets: [
 ### CocoaPods
 
 ```ruby
-pod 'LiveAndAiChat', '~> 0.1.0'
+pod 'LiveAndAiChat', '~> 0.2.0'
 ```
 
 ## Quick start
@@ -138,19 +138,46 @@ and starts fresh.
 ```swift
 sdk.sendMessage("Hi, I have a question.")
 
-// Queue an attachment from a PHPickerResult / UIDocumentPicker pick:
-sdk.attachFile(
+// Bytes you already hold in memory (returns the queue-item id):
+let id = sdk.attachFile(
     data: fileData,
     name: "screenshot.png",
     mimeType: "image/png",
     previewUri: localFileURL.absoluteString
 )
-// Next sendMessage() drains the queue and includes uploaded attachments.
+
+// Any other source — base64, data URIs, file URLs/paths (security-scoped
+// picker URLs handled), and (when the config enables
+// allowRemoteAttachmentUrls) remote URLs. `AttachmentSource.detect(_:)`
+// is the safe `auto` mode for strings:
+sdk.attach(
+    AttachmentRequest(
+        source: .filePath(pickedURL.absoluteString),
+        name: "receipt.pdf",
+        mimeType: "application/pdf",
+        declaredSize: pickedSize,
+        metadata: ["origin": "orders-screen"]
+    )
+)
+// Next sendMessage() drains the queue and includes uploaded attachments —
+// a message is never sent with an attachment that hasn't finished uploading.
+
+// Cancel / clear (cancelling stops an in-flight upload):
+sdk.removeAttachment(id: id)
+sdk.clearAttachments()
 
 sdk.retryMessage(messageId: failedMessage.id)
 sdk.requestHandoff(reason: "billing question")
 sdk.sendTypingStart()  // automatically followed by sendTypingStop after idle
 ```
+
+Validation runs before anything is queued: base64 must decode, file URLs
+must be readable, data must be non-empty and at most 25 MB, MIME must be
+one of png/jpeg/webp/gif/pdf, a wrong `declaredSize` is rejected as
+corruption, and the extension must agree with the MIME type. Reads and
+uploads run off the main thread; progress and results stream through the
+attachment queue and `attachmentDidUpdate`. Attachment contents are
+never logged.
 
 ## Observing state
 
@@ -178,10 +205,33 @@ class MyHandler: LiveAndAiChatDelegate {
     func agentTypingDidChange(_ t: Bool) { … }
     func connectionStateDidChange(_ s: ConnectionState) { … }
     func didEncounterError(_ e: LiveAndAiChatError) { … }
+    func unreadCountDidChange(_ count: Int) { … }
+    func attachmentDidUpdate(_ a: QueuedAttachment) { … }
+    func chatDidClose(_ event: ChatCloseEvent) { … }
 }
 
 sdk.addDelegate(MyHandler())
 ```
+
+## The chat-close event
+
+`chatDidClose` fires **exactly once per chat presentation**, whichever way
+the built-in chat screen goes away:
+
+| Path | `reason` | `initiator` |
+|---|---|---|
+| In-chat X button | `.closeButton` | `.user` |
+| Sheet/gesture dismissal | `.gesture` | `.user` |
+| `closeChat()` | `.programmatic` | `.host` |
+| `destroy()` | `.sessionEnded` | `.sdk` |
+| Host dismissing/navigating the screen away | `.hostNavigation` | `.host` |
+
+The event carries `timestamp`, `conversationId`, `assignmentId`,
+`channel`, `previousState`, `unreadCount`, `hasDraft`,
+`pendingAttachmentCount`, and `metadata` (SDK version + platform) —
+never message contents, credentials, or attachment data. `closeChat()`
+now also dismisses the presented chat controller. Delegates are held
+weakly, so they clean up automatically when your object deallocates.
 
 ## Customisation
 
@@ -195,9 +245,11 @@ light or dark default based on the system colour scheme.
 
 ## Privacy
 
-The SDK does not require any `Info.plist` permission keys. Photo Library
-access for attachments uses `PHPickerViewController`, which runs out-of-process
-and doesn't trigger the `NSPhotoLibraryUsageDescription` prompt.
+The SDK does not require any `Info.plist` permission keys. The built-in
+chat screen picks attachments with `UIDocumentPickerViewController`
+(out-of-process; no usage-description prompt). The bundled Example app
+additionally demonstrates `PHPickerViewController`, which is likewise
+out-of-process.
 
 If you save attachments to the device's Photos library from the in-app image
 viewer, add:

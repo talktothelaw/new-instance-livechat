@@ -56,6 +56,8 @@ public struct LiveAndAiChatConfig: Sendable {
     /// Optional initial message sent on `initCsAiChat`. Web parity.
     public let initialMessage: String?
 
+    public let allowRemoteAttachmentUrls: Bool
+
     public init(
         apiKey: String,
         baseUrl: String = LiveAndAiChatConfig.defaultBaseUrl,
@@ -63,7 +65,8 @@ public struct LiveAndAiChatConfig: Sendable {
         ssePath: String = "/graphql/stream",
         wsPath: String = "/graphql/ws",
         transport: TransportMode? = nil,
-        initialMessage: String? = nil
+        initialMessage: String? = nil,
+        allowRemoteAttachmentUrls: Bool = false
     ) throws {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedKey.isEmpty {
@@ -104,6 +107,7 @@ public struct LiveAndAiChatConfig: Sendable {
         self.wsPath = wsPath
         self.transport = transport
         self.initialMessage = initialMessage
+        self.allowRemoteAttachmentUrls = allowRemoteAttachmentUrls
     }
 
     /// The value sent on `x-api-key`. If the host passed a `keyId:secret`

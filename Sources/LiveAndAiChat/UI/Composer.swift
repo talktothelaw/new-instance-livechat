@@ -21,8 +21,8 @@ struct Composer: View {
     let onRemoveAttachment: (String) -> Void
     let onSend: (String) -> Void
     let onTyping: (Bool) -> Void
+    @Binding var text: String
 
-    @State private var text: String = ""
     @State private var isTyping: Bool = false
     @State private var typingDebounce: DispatchWorkItem?
     @Environment(\.chatColors) private var colors

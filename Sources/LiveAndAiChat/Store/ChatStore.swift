@@ -13,6 +13,11 @@ final class ChatStore: ObservableObject {
     @Published private(set) var assignment: Assignment?
     @Published private(set) var agentTyping: Bool = false
     @Published private(set) var unreadCount: Int = 0
+    @Published private(set) var draftText: String = ""
+
+    func updateDraft(_ text: String) {
+        draftText = text
+    }
     @Published private(set) var widgetOpen: Bool = false
     /// Highest `seq` seen so far. Drives gap-fill on reconnect, mirroring
     /// the web SDK's `highestSeq` and Android `ChatStore.highestSeq`.
@@ -93,6 +98,7 @@ final class ChatStore: ObservableObject {
     }
 
     func reset() {
+        draftText = ""
         flowState = .idle
         messages = []
         conversation = nil
