@@ -139,15 +139,30 @@ chat identity token and hand it to the app. The token is the identity, so
 nothing else is needed:
 
 ```swift
-// Your backend, with the SECRET key:
-//   POST https://service.newinstance.cloud/service
+// Your backend, with the SECRET key, typically at sign-in:
+//   POST https://api.newinstance.cloud/api/v1/chat/sessions
 //   x-api-key: sk_live_abc123:YOUR_SECRET_KEY
-//   mutation { createCsCustomerToken(input: {
-//     customerId: "usr_123", customerName: "Ada Lovelace"
-//   }) { token expiresAt } }
+//   { "customerId": "usr_123", "customerName": "Ada Lovelace",
+//     "customerEmail": "ada@example.com", "customerPhone": "+44 20 7946 0958",
+//     "metadata": { "plan": "enterprise" }, "expiresInSeconds": 21600 }
+//   -> { token, expiresAt, session: { sessionId, ... } }
 
 sdk.setUser(ChatUser.fromToken(tokenFromYourBackend))
 ```
+
+Everything you put in that payload is signed into the token, so the chat
+session already knows the customer before the app says anything:
+
+```
+customerId    -> the verified customer id
+customerName  -> the name on the conversation and on every message
+customerEmail -> also satisfies the merchant's "require email" setting
+customerPhone -> shown to the agent
+metadata      -> any extra context your agents should see
+```
+
+The client then passes **one string**. It never repeats the name, never
+repeats the email, and is never shown a pre-chat form.
 
 The server verifies the signature and derives the name, email and customer id
 from the token's claims, so a tampered or repackaged app cannot claim to be
@@ -165,6 +180,21 @@ a switch: the SDK compares the token's subject, not the token string.
 
 Tokens expire (one hour by default). A rejected one surfaces as
 `ChatErrorCode.invalidIdentityToken`; mint a fresh one.
+
+Sessions are managed over REST: `POST /api/v1/chat/sessions` to create,
+`DELETE /api/v1/chat/sessions?customerId=...` on sign-out. You choose the
+lifetime (60 seconds to 24 hours, default 1 hour) with `expiresInSeconds`.
+
+A customer holds **one** live session at a time. Creating another while
+theirs is valid returns `409` with the existing session; mint again once it
+expires or after you revoke it. Revocation takes effect on the next request,
+so an invalidated token stops working immediately even though its signature
+is still valid.
+
+The token is the session: the identity is signed into it, and the platform
+stores no copy. Decode the token if you need the name, email, phone or
+metadata back.
+
 
 ## Sending messages and attachments
 
