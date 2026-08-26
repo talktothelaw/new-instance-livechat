@@ -39,6 +39,14 @@ final class SessionManager {
         set { setOrRemove(Keys.customerId, newValue) }
     }
 
+    /// Stable key for the customer this saved session belongs to. Derived from
+    /// the token subject when a chat identity token is in use, otherwise from
+    /// customer id or email. Never used for authorization.
+    var identityKey: String? {
+        get { defaults.string(forKey: Keys.identityKey) }
+        set { setOrRemove(Keys.identityKey, newValue) }
+    }
+
     func clear() {
         for k in Keys.all { defaults.removeObject(forKey: k) }
     }
@@ -54,6 +62,7 @@ final class SessionManager {
         static let customerName = "nisdk_customerName"
         static let customerEmail = "nisdk_customerEmail"
         static let customerId = "nisdk_customerId"
-        static let all = [conversationId, assignmentId, customerName, customerEmail, customerId]
+        static let identityKey = "nisdk_identityKey"
+        static let all = [conversationId, assignmentId, customerName, customerEmail, customerId, identityKey]
     }
 }

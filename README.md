@@ -121,17 +121,50 @@ let config = try LiveAndAiChatConfig(
 
 ### User identity
 
+`apiKey` is the publishable widget key **ID**. The `keyId:secret` form belongs
+on your server only, including for minting the identity token below.
+
+**Anonymous or self-declared:**
+
 ```swift
 sdk.setUser(ChatUser(
     customerName: "Ada Lovelace",     // required
     customerEmail: "ada@example.com", // optional
-    customerId: "user_42"             // optional — your internal id
+    customerId: "user_42"             // optional; see the caveat below
 ))
 ```
 
+**Verified (recommended when you have accounts).** Have your backend mint a
+chat identity token and hand it to the app. The token is the identity, so
+nothing else is needed:
+
+```swift
+// Your backend, with the SECRET key:
+//   POST https://service.newinstance.cloud/service
+//   x-api-key: sk_live_abc123:YOUR_SECRET_KEY
+//   mutation { createCsCustomerToken(input: {
+//     customerId: "usr_123", customerName: "Ada Lovelace"
+//   }) { token expiresAt } }
+
+sdk.setUser(ChatUser.fromToken(tokenFromYourBackend))
+```
+
+The server verifies the signature and derives the name, email and customer id
+from the token's claims, so a tampered or repackaged app cannot claim to be
+someone else.
+
+`customerId` passed **without** a token is recorded on the conversation for
+agent context and is deliberately **not** treated as identity: it is never
+matched against other conversations, because trusting a client-asserted id
+would let anyone resume someone else's chat by guessing it.
+
 You can call `setUser` after `build()` if identity becomes available later
-(post-login). Changing the email or customerId clears any saved conversation
-and starts fresh.
+(post-login). Switching to a different customer clears any saved conversation
+and starts fresh. Refreshing a token for the *same* customer does not count as
+a switch: the SDK compares the token's subject, not the token string.
+
+Tokens expire (one hour by default). A rejected one surfaces as
+`ChatErrorCode.invalidIdentityToken`; mint a fresh one.
 
 ## Sending messages and attachments
 
@@ -235,13 +268,37 @@ weakly, so they clean up automatically when your object deallocates.
 
 ## Customisation
 
+The chat resolves its colours from three layers:
+
+```
+dashboard theme  >  your local theme  >  the SDK's built-in theme
+```
+
 Branding (colours, logo, company name, welcome message) is configured from your
 dashboard at [newinstance.cloud](https://newinstance.cloud) — the SDK fetches it on
 launch and applies it automatically. You do not need to ship colour values in
 the app.
 
-If no merchant appearance is configured, the SDK falls back to a sensible
-light or dark default based on the system colour scheme.
+If you want a say, pass a local theme. It is ranked **below** anything the
+dashboard sets and **above** the built-in palette, merged token by token, so
+setting one colour does not discard the others:
+
+```swift
+let config = try LiveAndAiChatConfig(
+    apiKey: "sk_live_…",
+    theme: ChatThemeOverride(mode: .dark, sentBubble: "#16A34A")
+)
+```
+
+Every `ChatThemeOverride` field is optional; colours are hex strings
+(`#RRGGBB` or `#AARRGGBB`). An unparseable value is ignored rather than
+throwing. `mode` is only a preference: the dashboard's explicit light/dark
+wins, its `auto` defers to yours, and if nobody pins one the system colour
+scheme decides.
+
+If no dashboard configuration is reachable, your local theme still applies and
+the built-in palette fills the rest, so the chat is always fully themed, even
+offline. You get a `configFetchFailed` warning on the error channel.
 
 ## Privacy
 
@@ -278,6 +335,41 @@ sdk.$lifecycle
 `LiveAndAiChatError.type` is one of `.network` / `.validation` / `.auth` /
 `.system`. `error.recoverable == true` means a retry has a chance of
 succeeding.
+
+`error.code` carries the raw GraphQL or transport code; call
+`error.sdkCode(usingIdentityToken:)` to normalise onto the stable
+`ChatErrorCode` vocabulary shared with every other chat SDK. Nothing on this
+channel is shown inside the chat interface, and it never contains the API key,
+the identity token, or customer data.
+
+```swift
+func didEncounterError(_ error: LiveAndAiChatError) {
+    switch error.sdkCode(usingIdentityToken: true) {
+    case ChatErrorCode.invalidIdentityToken: refreshChatToken()
+    case ChatErrorCode.invalidPublicKey: reportMisconfiguration()
+    default: break
+    }
+}
+```
+
+| `ChatErrorCode` | What went wrong |
+|---|---|
+| `missingWidgetKey` | No API key was supplied |
+| `invalidPublicKey` | The key was rejected: wrong key, wrong environment, revoked, expired |
+| `chatConfigUnavailable` | The key is fine, but the organization has no chat configuration |
+| `chatDisabled` | Chat is switched off in the dashboard |
+| `configFetchFailed` | Remote configuration could not be loaded; the local/built-in theme is in use |
+| `invalidIdentityToken` | The token was malformed, expired, or signed for another organization |
+| `networkError` | The backend could not be reached |
+| `transportError` | The realtime connection dropped |
+| `chatInitializationFailed` | The conversation could not be started |
+| `messageSendFailed` | A message could not be delivered |
+| `attachmentFailed` | An attachment could not be uploaded |
+| `serverError` | The backend returned something unusable |
+
+Pass `usingIdentityToken: true` when the SDK was configured with a token: an
+auth failure cannot otherwise tell a rejected key from a rejected token, and
+the two need different fixes.
 
 ## Sample app
 

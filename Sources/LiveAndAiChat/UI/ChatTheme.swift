@@ -141,64 +141,70 @@ public struct ChatColors: Equatable {
         warningColor: hex("#FBBF24")
     )
 
-    /// Build a palette from the server-provided appearance object. When
-    /// `appearance` is nil we return ``lightDefault`` — callers in dark
-    /// mode should use ``from(_:colorScheme:)`` instead to get the
-    /// dark fallback.
-    public static func from(_ appearance: OrgAppearance?) -> ChatColors {
-        guard let a = appearance else { return .lightDefault }
+    /// Merge a server-provided appearance ON TOP of this palette, per token.
+    /// A token the server left unset keeps the value it already had, which is
+    /// what makes `remote > local > native` hold property by property.
+    public func merging(_ appearance: OrgAppearance?) -> ChatColors {
+        guard let a = appearance else { return self }
         let c = a.colors
-        return ChatColors(
-            primary: hex(c.headerBackground),
-            background: hex(c.chatBackground),
-            text: hex(c.receivedText),
-            textSecondary: hex(c.receivedTimestamp),
-            border: hex(c.chatInputBorder),
-            inputBg: hex(c.chatInputBackground),
-            inputBorder: hex(c.chatInputBorder),
-            inputText: hex(c.chatInputText),
-            inputPlaceholder: hex(c.chatInputPlaceholder),
-            headerBackground: hex(c.headerBackground),
-            headerPrimaryText: hex(c.headerPrimaryText),
-            headerSecondaryText: hex(c.headerSecondaryText),
-            headerIcon: hex(c.headerIcon),
-            closeButton: hex(c.closeButton),
-            sentBubble: hex(c.sentBubble),
-            sentText: hex(c.sentText),
-            sentTimestamp: hex(c.sentTimestamp),
-            receivedBubble: hex(c.receivedBubble),
-            receivedText: hex(c.receivedText),
-            receivedTimestamp: hex(c.receivedTimestamp),
-            systemMessageText: hex(c.systemMessageText),
-            daySeparatorBg: hex(c.daySeparatorBackground),
-            daySeparatorText: hex(c.daySeparatorText),
-            footerContainer: hex(c.footerContainer),
-            sendButtonBg: hex(c.sendButtonBackground),
-            sendButtonIcon: hex(c.sendButtonIcon),
-            attachmentButton: hex(c.attachmentButton),
-            typingBg: hex(c.typingIndicatorBackground),
-            typingDot: hex(c.typingIndicatorDot),
-            unreadBadgeBg: hex(c.unreadBadgeBackground),
-            unreadBadgeText: hex(c.unreadBadgeText),
-            scrollToBottomBg: hex(c.scrollToBottomButtonBackground),
-            scrollToBottomIcon: hex(c.scrollToBottomButtonIcon),
-            onlineStatus: hex(c.onlineStatus),
-            offlineStatus: hex(c.offlineStatus),
-            errorColor: hex(c.error),
-            successColor: hex(c.success),
-            warningColor: hex(c.warning)
-        )
+        var out = self
+        func set(_ keyPath: WritableKeyPath<ChatColors, Color>, _ value: String?) {
+            guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            out[keyPath: keyPath] = ChatColors.hex(value)
+        }
+        set(\.primary, c.headerBackground)
+        set(\.background, c.chatBackground)
+        set(\.text, c.receivedText)
+        set(\.textSecondary, c.receivedTimestamp)
+        set(\.border, c.chatInputBorder)
+        set(\.inputBg, c.chatInputBackground)
+        set(\.inputBorder, c.chatInputBorder)
+        set(\.inputText, c.chatInputText)
+        set(\.inputPlaceholder, c.chatInputPlaceholder)
+        set(\.headerBackground, c.headerBackground)
+        set(\.headerPrimaryText, c.headerPrimaryText)
+        set(\.headerSecondaryText, c.headerSecondaryText)
+        set(\.headerIcon, c.headerIcon)
+        set(\.closeButton, c.closeButton)
+        set(\.sentBubble, c.sentBubble)
+        set(\.sentText, c.sentText)
+        set(\.sentTimestamp, c.sentTimestamp)
+        set(\.receivedBubble, c.receivedBubble)
+        set(\.receivedText, c.receivedText)
+        set(\.receivedTimestamp, c.receivedTimestamp)
+        set(\.systemMessageText, c.systemMessageText)
+        set(\.daySeparatorBg, c.daySeparatorBackground)
+        set(\.daySeparatorText, c.daySeparatorText)
+        set(\.footerContainer, c.footerContainer)
+        set(\.sendButtonBg, c.sendButtonBackground)
+        set(\.sendButtonIcon, c.sendButtonIcon)
+        set(\.attachmentButton, c.attachmentButton)
+        set(\.typingBg, c.typingIndicatorBackground)
+        set(\.typingDot, c.typingIndicatorDot)
+        set(\.unreadBadgeBg, c.unreadBadgeBackground)
+        set(\.unreadBadgeText, c.unreadBadgeText)
+        set(\.scrollToBottomBg, c.scrollToBottomButtonBackground)
+        set(\.scrollToBottomIcon, c.scrollToBottomButtonIcon)
+        set(\.onlineStatus, c.onlineStatus)
+        set(\.offlineStatus, c.offlineStatus)
+        set(\.errorColor, c.error)
+        set(\.successColor, c.success)
+        set(\.warningColor, c.warning)
+        return out
     }
 
-    /// Colour-scheme-aware factory. Picks `lightDefault` / `darkDefault`
-    /// based on the system's current `colorScheme` when the merchant
-    /// hasn't shipped an explicit `appearance` config. Pass-through
-    /// otherwise (merchant config wins regardless of system mode).
+    /// Build a palette from the server-provided appearance object alone.
+    /// Retained for source compatibility; new code should use
+    /// ``resolve(appearance:override:colorScheme:)`` so the local theme layer
+    /// is not skipped.
+    public static func from(_ appearance: OrgAppearance?) -> ChatColors {
+        ChatColors.lightDefault.merging(appearance)
+    }
+
+    /// Colour-scheme-aware factory. Equivalent to
+    /// ``resolve(appearance:override:colorScheme:)`` with no local override.
     public static func from(_ appearance: OrgAppearance?, colorScheme: ColorScheme) -> ChatColors {
-        if appearance == nil {
-            return colorScheme == .dark ? .darkDefault : .lightDefault
-        }
-        return from(appearance)
+        resolve(appearance: appearance, override: nil, colorScheme: colorScheme)
     }
 
     /// Lenient hex parser — `#RRGGBB` or `#AARRGGBB`. Returns black on

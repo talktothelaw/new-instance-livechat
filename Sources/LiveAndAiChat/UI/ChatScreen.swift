@@ -38,7 +38,11 @@ public struct ChatScreen: View {
     }
 
     public var body: some View {
-        let colors = ChatColors.from(sdk.orgConfig?.appearance, colorScheme: systemColorScheme)
+        let colors = ChatColors.resolve(
+            appearance: sdk.orgConfig?.appearance,
+            override: sdk.themeOverride,
+            colorScheme: systemColorScheme
+        )
         let companyName = sdk.orgConfig?.branding.companyName ?? ""
         let title = store.conversation?.assignedAgentName
             ?? (companyName.isEmpty ? "Chat" : companyName)
