@@ -40,9 +40,6 @@ public final class LiveAndAiChat: ObservableObject {
 
     private let config: LiveAndAiChatConfig
 
-    /// The integrating app's local theme, read by ``ChatScreen`` so the single
-    /// theme resolver can rank it below the dashboard config and above the
-    /// built-in palette.
     public var themeOverride: ChatThemeOverride? { config.theme }
     private let gql: GqlClient
     private let session: SessionManager
@@ -597,10 +594,6 @@ public final class LiveAndAiChat: ObservableObject {
         // User mismatch detection: wipe stored session when the host
         // sets a different identity from what's persisted.
         if let u = user {
-            // Identity key covers the token case too: refreshing a token for
-            // the same customer must NOT look like a user switch (the raw
-            // string changes every time), while genuinely switching customers
-            // must wipe the saved conversation.
             let currentIdentity = u.identityKey
             if !currentIdentity.isEmpty,
                let savedIdentity = session.identityKey,
@@ -632,9 +625,6 @@ public final class LiveAndAiChat: ObservableObject {
         // Fresh init.
         let u = user ?? ChatUser(customerName: "Guest")
         var input: [String: Any] = ["customerName": u.customerName]
-        // A signed token is the authoritative identity; the plain fields ride
-        // along only so an older backend that does not understand tokens still
-        // attributes the conversation.
         if let v = u.customerToken, !v.isEmpty { input["customerToken"] = v }
         if let v = u.customerEmail { input["customerEmail"] = v }
         if let v = u.customerId { input["customerId"] = v }

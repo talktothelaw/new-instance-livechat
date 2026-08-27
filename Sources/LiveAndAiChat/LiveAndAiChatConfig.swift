@@ -15,15 +15,8 @@ public enum TransportMode: String, Codable, Sendable {
 /// `email` remain optional.
 public struct ChatUser: Sendable, Equatable {
     public let customerName: String
-    /// Your reference for this customer. Sent for agent context but NOT
-    /// trusted as identity: an id asserted by client code cannot be verified.
-    /// For a trusted identity use ``customerToken``.
     public let customerId: String?
     public let customerEmail: String?
-    /// Chat identity token minted by YOUR backend with `createCsCustomerToken`
-    /// and handed to the app. When set it is the authoritative identity: the
-    /// server derives name, email and customer id from its signed claims and
-    /// ignores the values above, so a tampered app cannot impersonate anyone.
     public let customerToken: String?
 
     public init(
@@ -39,29 +32,16 @@ public struct ChatUser: Sendable, Equatable {
         self.customerToken = customerToken
     }
 
-    /// Identity for a chat opened with only a signed token. The display name
-    /// here is a placeholder: the backend replaces name, email and customer id
-    /// from the token's claims.
     public static func fromToken(_ token: String) -> ChatUser {
         ChatUser(customerName: "Customer", customerToken: token)
     }
 
-    /// Identity key used ONLY to notice that the host switched customers, so a
-    /// stale conversation is not resumed for the wrong person.
-    ///
-    /// For a token this reads the `sub` claim WITHOUT verifying the signature,
-    /// which is safe precisely because the value is never used for
-    /// authorization: the backend independently verifies the token. Using the
-    /// raw token string would not work, because refreshing a token for the
-    /// same customer produces a different string each time.
     var identityKey: String {
         if let token = customerToken, let sub = unverifiedTokenSubject(token) { return sub }
         return customerId ?? customerEmail ?? ""
     }
 }
 
-/// Read the `sub` claim of a compact JWS without verifying it. Returns nil for
-/// anything unparseable. NEVER use the result for an access decision.
 func unverifiedTokenSubject(_ token: String) -> String? {
     let parts = token.split(separator: ".")
     guard parts.count == 3 else { return nil }
@@ -106,9 +86,6 @@ public struct LiveAndAiChatConfig: Sendable {
 
     public let allowRemoteAttachmentUrls: Bool
 
-    /// Local theme. Ranked BELOW whatever the merchant configured in the
-    /// dashboard and ABOVE the SDK's built-in palette, merged per property:
-    /// a token set here is used only where the dashboard did not set one.
     public let theme: ChatThemeOverride?
 
     public init(

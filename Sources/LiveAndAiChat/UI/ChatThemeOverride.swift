@@ -1,22 +1,6 @@
 import SwiftUI
 
-/// Local theme supplied by the integrating app.
-///
-/// Every field is optional and merged INDEPENDENTLY, so setting one colour
-/// leaves the rest alone. Precedence across the SDK is:
-///
-///     dashboard / API theme  >  this local theme  >  the SDK's built-in theme
-///
-/// A value set here therefore shows up only where the merchant's dashboard
-/// configuration did not already specify that token, and the built-in palette
-/// fills in whatever neither layer set. The chat is always fully themed, even
-/// with no network and no configuration at all.
-///
-/// Colours are hex strings (`#RRGGBB` or `#AARRGGBB`); an unparseable value is
-/// ignored rather than throwing.
 public struct ChatThemeOverride: Equatable, Sendable {
-    /// Force light or dark. `nil` means "no opinion": the dashboard's mode
-    /// wins if it set one, otherwise the device setting.
     public enum Mode: String, Sendable { case light, dark }
 
     public var mode: Mode?
@@ -102,9 +86,6 @@ public struct ChatThemeOverride: Equatable, Sendable {
         self.unreadBadgeText = unreadBadgeText
     }
 
-    /// Build an override from a string dictionary, for bridges (React Native,
-    /// Flutter) that cannot pass a Swift struct. Unknown keys are ignored so a
-    /// newer JS SDK cannot break an older native SDK.
     public static func fromDictionary(_ dict: [String: String]) -> ChatThemeOverride {
         func v(_ key: String) -> String? {
             guard let value = dict[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -143,9 +124,6 @@ public struct ChatThemeOverride: Equatable, Sendable {
 }
 
 public extension ChatColors {
-    /// Apply the integrating app's local theme. Called BEFORE the remote layer
-    /// so anything the dashboard specifies wins, and only the tokens the
-    /// dashboard left alone keep the local value.
     func applying(_ override: ChatThemeOverride?) -> ChatColors {
         guard let o = override else { return self }
         var c = self
@@ -185,13 +163,6 @@ public extension ChatColors {
         return c
     }
 
-    /// The single theme-resolution point for the iOS UI.
-    ///
-    ///     dashboard / API theme  >  local override  >  built-in palette
-    ///
-    /// Each layer is merged per token, so a partial remote config leaves the
-    /// rest to the local theme, and the built-in palette guarantees every
-    /// token has a value even with no network and no configuration.
     static func resolve(
         appearance: OrgAppearance?,
         override: ChatThemeOverride?,
@@ -203,9 +174,6 @@ public extension ChatColors {
         return base.merging(appearance)
     }
 
-    /// Which light/dark base to use, honouring the same precedence as colours.
-    /// A remote `themeMode` of `auto` means "no opinion" and defers to the
-    /// local override, then to the device.
     static func resolveDarkMode(
         appearance: OrgAppearance?,
         override: ChatThemeOverride?,

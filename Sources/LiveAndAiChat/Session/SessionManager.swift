@@ -39,9 +39,6 @@ final class SessionManager {
         set { setOrRemove(Keys.customerId, newValue) }
     }
 
-    /// Stable key for the customer this saved session belongs to. Derived from
-    /// the token subject when a chat identity token is in use, otherwise from
-    /// customer id or email. Never used for authorization.
     var identityKey: String? {
         get { defaults.string(forKey: Keys.identityKey) }
         set { setOrRemove(Keys.identityKey, newValue) }

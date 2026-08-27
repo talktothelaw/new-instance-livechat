@@ -141,9 +141,6 @@ public struct ChatColors: Equatable {
         warningColor: hex("#FBBF24")
     )
 
-    /// Merge a server-provided appearance ON TOP of this palette, per token.
-    /// A token the server left unset keeps the value it already had, which is
-    /// what makes `remote > local > native` hold property by property.
     public func merging(_ appearance: OrgAppearance?) -> ChatColors {
         guard let a = appearance else { return self }
         let c = a.colors
@@ -193,16 +190,10 @@ public struct ChatColors: Equatable {
         return out
     }
 
-    /// Build a palette from the server-provided appearance object alone.
-    /// Retained for source compatibility; new code should use
-    /// ``resolve(appearance:override:colorScheme:)`` so the local theme layer
-    /// is not skipped.
     public static func from(_ appearance: OrgAppearance?) -> ChatColors {
         ChatColors.lightDefault.merging(appearance)
     }
 
-    /// Colour-scheme-aware factory. Equivalent to
-    /// ``resolve(appearance:override:colorScheme:)`` with no local override.
     public static func from(_ appearance: OrgAppearance?, colorScheme: ColorScheme) -> ChatColors {
         resolve(appearance: appearance, override: nil, colorScheme: colorScheme)
     }
