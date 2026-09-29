@@ -25,6 +25,7 @@ public enum ChatErrorCode {
     public static let messageSendFailed = "MESSAGE_SEND_FAILED"
     public static let attachmentFailed = "ATTACHMENT_FAILED"
     public static let serverError = "SERVER_ERROR"
+    public static let invalidConfig = "E_CONFIG"
 }
 
 public struct LiveAndAiChatError: Error, CustomStringConvertible, Sendable {
@@ -64,7 +65,7 @@ public struct LiveAndAiChatError: Error, CustomStringConvertible, Sendable {
         case .network:
             return ChatErrorCode.networkError
         case .validation:
-            return ChatErrorCode.serverError
+            return code == ChatErrorCode.invalidConfig ? ChatErrorCode.invalidConfig : ChatErrorCode.serverError
         case .system:
             return ChatErrorCode.chatInitializationFailed
         }

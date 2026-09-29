@@ -1,4 +1,4 @@
-# LiveAndAiChat — iOS SDK
+# LiveAndAiChat iOS SDK
 
 A native Swift SDK that drops a complete AI + live-agent chat experience into
 your iOS app. Hosted by [newinstance.cloud](https://newinstance.cloud).
@@ -7,9 +7,9 @@ your iOS app. Hosted by [newinstance.cloud](https://newinstance.cloud).
   viewer, and per-message status receipts
 - AI conversation with seamless handoff to a live human agent
 - Photo Library + Files attachment pickers
-- Two-tier image cache (memory + disk) — repeat renders never re-fetch
+- Two-tier image cache (memory + disk): repeat renders never re-fetch
 - Resilient transport: HTTP/1.1-pinned Server-Sent Events with WebSocket fallback
-- Offline-tolerant — silent gap-fill resync when the network drops events
+- Offline-tolerant: silent gap-fill resync when the network drops events
 - Light / dark themes, Dynamic Type, VoiceOver, Reduce Motion, iPad layout
 
 ## Requirements
@@ -21,7 +21,7 @@ your iOS app. Hosted by [newinstance.cloud](https://newinstance.cloud).
 
 ### Swift Package Manager
 
-In Xcode → **File → Add Package Dependencies…** and enter:
+In Xcode, open **File > Add Package Dependencies…** and enter:
 
 ```
 https://github.com/talktothelaw/new-instance-livechat.git
@@ -31,7 +31,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.2.0"),
+    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.4.0"),
 ],
 targets: [
     .target(
@@ -46,46 +46,45 @@ targets: [
 ### CocoaPods
 
 ```ruby
-pod 'LiveAndAiChat', '~> 0.2.0'
+pod 'LiveAndAiChat', '~> 0.4.0'
 ```
 
 ## Quick start
+
+Your backend mints a chat token for the signed-in customer (see
+[Customer token mode](#customer-token-mode-recommended)); the app passes it to
+the SDK:
 
 ```swift
 import SwiftUI
 import LiveAndAiChat
 
-@main
-struct MyApp: App {
-    @StateObject private var sdk: LiveAndAiChat = {
-        let config = try! LiveAndAiChatConfig(apiKey: "sk_live_…")
-        return try! LiveAndAiChat.Builder()
-            .config(config)
-            .user(ChatUser(customerName: "Ada", customerEmail: "ada@example.com"))
-            .build()
-    }()
-
+struct SupportButton: View {
+    let sdk: LiveAndAiChat
     @State private var showChat = false
 
-    var body: some Scene {
-        WindowGroup {
-            Button("Talk to support") { showChat = true }
-                .sheet(isPresented: $showChat) {
-                    ChatScreen(
-                        sdk: sdk,
-                        onClose: { showChat = false },
-                        onPickFile: { /* present your attachment picker */ }
-                    )
-                }
-                .onAppear { sdk.initialize() }
-        }
+    var body: some View {
+        Button("Talk to support") { showChat = true }
+            .sheet(isPresented: $showChat) {
+                ChatScreen(
+                    sdk: sdk,
+                    onClose: { showChat = false },
+                    onPickFile: {}
+                )
+            }
+            .onAppear { sdk.initialize() }
     }
+}
+
+func makeChat(tokenFromYourBackend: String) throws -> LiveAndAiChat {
+    let config = try LiveAndAiChatConfig(customerToken: tokenFromYourBackend)
+    return try LiveAndAiChat.Builder().config(config).build()
 }
 ```
 
 That's the entire integration. Brand colours, agent assignment, AI bot config,
 and welcome message all come from the dashboard at
-[`newinstance.cloud`](https://newinstance.cloud) — there's nothing else to wire up.
+[`newinstance.cloud`](https://newinstance.cloud); there's nothing else to wire up.
 
 ### UIKit hosts
 
@@ -95,62 +94,117 @@ If you don't use SwiftUI, present the chat as a modal:
 import LiveAndAiChat
 
 class ViewController: UIViewController {
-    let sdk = try! LiveAndAiChat.Builder()
-        .config(try! LiveAndAiChatConfig(apiKey: "sk_live_…"))
-        .user(ChatUser(customerName: "Ada"))
-        .build()
+    var sdk: LiveAndAiChat?
+
+    func startChat(tokenFromYourBackend: String) throws {
+        sdk = try LiveAndAiChat.Builder()
+            .config(LiveAndAiChatConfig(customerToken: tokenFromYourBackend))
+            .build()
+    }
 
     @IBAction func talkToSupport() {
-        sdk.present(from: self)
+        sdk?.present(from: self)
     }
 }
 ```
 
-## Configuration
+## Authentication
 
-`LiveAndAiChatConfig` only requires an API key. Get one from your dashboard at
-[newinstance.cloud](https://newinstance.cloud) → **Settings → API keys**.
+The SDK runs in exactly **one** of two modes, chosen by what you pass to
+`LiveAndAiChatConfig`:
 
-```swift
-let config = try LiveAndAiChatConfig(
-    apiKey: "sk_live_…",       // required — keyId only, never embed the secret half
-    transport: .sse,           // .sse (default), .ws, or nil to let the server decide
-    initialMessage: "Hi!"      // optional — pre-seeds the first message
-)
+| Mode | You pass | Sent on every request | Customer identity |
+|---|---|---|---|
+| Customer token (JWT) | `customerToken` | `Authorization: Bearer <token>` | the token's claims, verified by the server |
+| API key | `apiKey: "keyId:secret"` | `x-api-key: keyId:secret` | `setUser(_:)` |
+
+Every request (GraphQL, every SSE request, the WebSocket upgrade) also carries
+`x-newinstance-sdk: ios/0.4.0`. Passing both `apiKey` and `customerToken`, or
+neither, throws (see [Configuration errors](#configuration-errors)).
+`config.authMode` tells you which mode is active.
+
+### Customer token mode (recommended)
+
+Use this for any app you ship to the public. Your secret key stays on your
+server; the app only ever holds a short-lived token for one customer.
+
+**1. Mint the token on your backend.** Call the REST API host with your full
+`keyId:secret` key, server side only:
+
+```
+POST https://api.newinstance.cloud/api/v1/chat/sessions
+x-api-key: sk_live_abc123:YOUR_SECRET_KEY
+Content-Type: application/json
+
+{
+  "customerId": "usr_123",
+  "customerName": "Ada Lovelace",
+  "customerEmail": "ada@example.com",
+  "customerPhone": "+44 20 7946 0958",
+  "metadata": { "plan": "enterprise" },
+  "expiresInSeconds": 3600
+}
 ```
 
-### User identity
+The response is `{ token, expiresAt, expiresInSeconds, session }`. Only
+`customerId` and `customerName` are required. A minimal Node backend endpoint
+that the app calls after sign-in:
 
-`apiKey` is the publishable widget key **ID**. The `keyId:secret` form belongs
-on your server only, including for minting the identity token below.
-
-**Anonymous or self-declared:**
-
-```swift
-sdk.setUser(ChatUser(
-    customerName: "Ada Lovelace",     // required
-    customerEmail: "ada@example.com", // optional
-    customerId: "user_42"             // optional; see the caveat below
-))
+```js
+app.post('/chat/token', requireSignedInUser, async (req, res) => {
+  const response = await fetch('https://api.newinstance.cloud/api/v1/chat/sessions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.NEWINSTANCE_API_KEY,
+    },
+    body: JSON.stringify({
+      customerId: req.user.id,
+      customerName: req.user.name,
+      customerEmail: req.user.email,
+      expiresInSeconds: 3600,
+    }),
+  });
+  const { token, expiresAt, expiresInSeconds } = await response.json();
+  res.json({ token, expiresAt, expiresInSeconds });
+});
 ```
 
-**Verified (recommended when you have accounts).** Have your backend mint a
-chat identity token and hand it to the app. The token is the identity, so
-nothing else is needed:
+`NEWINSTANCE_API_KEY` holds the full `keyId:secret` pair and never leaves your
+server.
+
+**2. Hand the token to the app:**
 
 ```swift
-// Your backend, with the SECRET key, typically at sign-in:
-//   POST https://api.newinstance.cloud/api/v1/chat/sessions
-//   x-api-key: sk_live_abc123:YOUR_SECRET_KEY
-//   { "customerId": "usr_123", "customerName": "Ada Lovelace",
-//     "customerEmail": "ada@example.com", "customerPhone": "+44 20 7946 0958",
-//     "metadata": { "plan": "enterprise" }, "expiresInSeconds": 21600 }
-//   -> { token, expiresAt, session: { sessionId, ... } }
-
-sdk.setUser(ChatUser.fromToken(tokenFromYourBackend))
+let token = try await myBackend.fetchChatToken()
+let config = try LiveAndAiChatConfig(customerToken: token)
+let sdk = try LiveAndAiChat.Builder().config(config).build()
+sdk.initialize()
 ```
 
-Everything you put in that payload is signed into the token, so the chat
+**3. Replace it when it expires:**
+
+When the token expires or is revoked, the SDK reports an `auth` error
+(`invalidIdentityToken`) and stops reconnecting. Fetch a fresh token from your
+backend and swap it in:
+
+```swift
+try sdk.setUserToken(try await myBackend.fetchChatToken())
+```
+
+A customer holds one live session, so minting while their current token is
+still valid returns `409`. To rotate before expiry, have your backend revoke
+the current session first (`DELETE /api/v1/chat/sessions?customerId=...`) and
+then mint.
+
+`setUserToken(_:)` swaps the token without rebuilding the SDK: every later
+request uses the new token, the realtime subscription reconnects with it, and
+if initialization had failed (for example because the old token expired) it
+runs again. The saved conversation is kept when the new token is for the same
+customer (same `sub` claim); a token for a different customer clears it and
+starts fresh. It throws `E_CONFIG` in API key mode or for a blank token.
+
+Everything you put in the token request is signed into the token, so the chat
 session already knows the customer before the app says anything:
 
 ```
@@ -161,25 +215,10 @@ customerPhone -> shown to the agent
 metadata      -> any extra context your agents should see
 ```
 
-The client then passes **one string**. It never repeats the name, never
-repeats the email, and is never shown a pre-chat form.
-
-The server verifies the signature and derives the name, email and customer id
-from the token's claims, so a tampered or repackaged app cannot claim to be
-someone else.
-
-`customerId` passed **without** a token is recorded on the conversation for
-agent context and is deliberately **not** treated as identity: it is never
-matched against other conversations, because trusting a client-asserted id
-would let anyone resume someone else's chat by guessing it.
-
-You can call `setUser` after `build()` if identity becomes available later
-(post-login). Switching to a different customer clears any saved conversation
-and starts fresh. Refreshing a token for the *same* customer does not count as
-a switch: the SDK compares the token's subject, not the token string.
-
-Tokens expire (one hour by default). A rejected one surfaces as
-`ChatErrorCode.invalidIdentityToken`; mint a fresh one.
+The server verifies the signature and takes the name, email and customer id
+from the token's claims only. In this mode `setUser(_:)` is accepted but
+ignored: nothing it carries is sent, so a tampered or repackaged app cannot
+claim to be someone else, and the customer never sees a pre-chat form.
 
 Sessions are managed over REST: `POST /api/v1/chat/sessions` to create,
 `DELETE /api/v1/chat/sessions?customerId=...` on sign-out. You choose the
@@ -189,19 +228,83 @@ A customer holds **one** live session at a time. Creating another while
 theirs is valid returns `409` with the existing session; mint again once it
 expires or after you revoke it. Revocation takes effect on the next request,
 so an invalidated token stops working immediately even though its signature
-is still valid.
+is still valid. The token is the session: the identity is signed into it, and
+the platform stores no copy. Decode the token if you need the name, email,
+phone or metadata back.
 
-The token is the session: the identity is signed into it, and the platform
-stores no copy. Decode the token if you need the name, email, phone or
-metadata back.
+### API key mode (trusted internal apps only)
 
+**This mode ships your secret key inside the app.** Anyone who can download
+the app can extract it and act as your organization. Use it only for trusted
+or internal apps you control (staff tools, kiosks, internal test builds), never
+for an app distributed to the public. Everything else should use
+[customer token mode](#customer-token-mode-recommended).
+
+```swift
+let config = try LiveAndAiChatConfig(apiKey: "sk_live_abc123:YOUR_SECRET_KEY")
+let sdk = try LiveAndAiChat.Builder()
+    .config(config)
+    .user(ChatUser(
+        customerName: "Ada Lovelace",
+        customerId: "user_42",
+        customerEmail: "ada@example.com"
+    ))
+    .build()
+```
+
+The key must be the full `keyId:secret` pair from your dashboard at
+[newinstance.cloud](https://newinstance.cloud) (**Settings > API keys**). It is
+sent whole on `x-api-key`; a key ID on its own is rejected at construction.
+Load it from your build configuration rather than committing it to source
+control.
+
+The customer comes from `setUser(_:)` (or `Builder.user(_:)`): `customerName`
+is required, `customerEmail` and `customerId` are optional, and all three are
+sent when the conversation starts. `customerId` in this mode is recorded on the
+conversation for agent context and is deliberately **not** treated as
+identity: it is never matched against other conversations, because trusting a
+client-asserted id would let anyone resume someone else's chat by guessing it.
+
+You can call `setUser` after `build()` if the customer becomes known later.
+Switching to a different customer (a different `customerId`, or `customerEmail`
+when there is no id) clears any saved conversation and starts fresh.
+`setUserToken(_:)` is not available in this mode.
+
+### Other options
+
+```swift
+let config = try LiveAndAiChatConfig(
+    customerToken: token,
+    transport: .sse,
+    initialMessage: "Hi!"
+)
+```
+
+`transport` is `.sse` (default), `.ws`, or `nil` to let the server decide.
+`initialMessage` is optional and pre-seeds the first message.
+
+`LiveAndAiChatConfig` never prints its credentials: `description`,
+`debugDescription` and `dump` show `apiKey: <keyId>:***` or
+`customerToken: ***`. The SDK's logs and errors never contain the secret or
+the token.
+
+### Configuration errors
+
+Invalid configuration throws `LiveAndAiChatError` with `type == .validation`,
+`code == "E_CONFIG"` (`ChatErrorCode.invalidConfig`) and `recoverable == false`:
+
+| Situation | `message` |
+|---|---|
+| Both `apiKey` and `customerToken`, or neither (blank counts as absent) | `pass either apiKey (keyId:secret) or customerToken` |
+| `apiKey` without a `:` or with an empty key ID or secret | `apiKey must be keyId:secret, or use customerToken` |
+| `setUserToken` in API key mode | `setUserToken is only available when the SDK is configured with customerToken` |
+| `setUserToken` with a blank token | `customerToken must not be blank` |
 
 ## Sending messages and attachments
 
 ```swift
 sdk.sendMessage("Hi, I have a question.")
 
-// Bytes you already hold in memory (returns the queue-item id):
 let id = sdk.attachFile(
     data: fileData,
     name: "screenshot.png",
@@ -209,10 +312,6 @@ let id = sdk.attachFile(
     previewUri: localFileURL.absoluteString
 )
 
-// Any other source — base64, data URIs, file URLs/paths (security-scoped
-// picker URLs handled), and (when the config enables
-// allowRemoteAttachmentUrls) remote URLs. `AttachmentSource.detect(_:)`
-// is the safe `auto` mode for strings:
 sdk.attach(
     AttachmentRequest(
         source: .filePath(pickedURL.absoluteString),
@@ -222,17 +321,23 @@ sdk.attach(
         metadata: ["origin": "orders-screen"]
     )
 )
-// Next sendMessage() drains the queue and includes uploaded attachments —
-// a message is never sent with an attachment that hasn't finished uploading.
 
-// Cancel / clear (cancelling stops an in-flight upload):
 sdk.removeAttachment(id: id)
 sdk.clearAttachments()
 
 sdk.retryMessage(messageId: failedMessage.id)
 sdk.requestHandoff(reason: "billing question")
-sdk.sendTypingStart()  // automatically followed by sendTypingStop after idle
+sdk.sendTypingStart()
 ```
+
+`attachFile` takes bytes you already hold in memory and returns the queue-item
+id. `attach` accepts any other source: base64, data URIs, file URLs and paths
+(security-scoped picker URLs handled), and remote URLs when the config enables
+`allowRemoteAttachmentUrls`. `AttachmentSource.detect(_:)` is the safe `auto`
+mode for strings. The next `sendMessage()` drains the queue and includes
+uploaded attachments; a message is never sent with an attachment that hasn't
+finished uploading. Removing an attachment cancels an in-flight upload, and
+`sendTypingStart()` is followed automatically by `sendTypingStop()` after idle.
 
 Validation runs before anything is queued: base64 must decode, file URLs
 must be readable, data must be non-empty and at most 25 MB, MIME must be
@@ -240,7 +345,7 @@ one of png/jpeg/webp/gif/pdf, a wrong `declaredSize` is rejected as
 corruption, and the extension must agree with the MIME type. Reads and
 uploads run off the main thread; progress and results stream through the
 attachment queue and `attachmentDidUpdate`. Attachment contents are
-never logged.
+never logged, and upload requests never carry your credentials.
 
 ## Observing state
 
@@ -291,9 +396,9 @@ the built-in chat screen goes away:
 
 The event carries `timestamp`, `conversationId`, `assignmentId`,
 `channel`, `previousState`, `unreadCount`, `hasDraft`,
-`pendingAttachmentCount`, and `metadata` (SDK version + platform) —
+`pendingAttachmentCount`, and `metadata` (SDK version + platform), and
 never message contents, credentials, or attachment data. `closeChat()`
-now also dismisses the presented chat controller. Delegates are held
+also dismisses the presented chat controller. Delegates are held
 weakly, so they clean up automatically when your object deallocates.
 
 ## Customisation
@@ -305,7 +410,7 @@ dashboard theme  >  your local theme  >  the SDK's built-in theme
 ```
 
 Branding (colours, logo, company name, welcome message) is configured from your
-dashboard at [newinstance.cloud](https://newinstance.cloud) — the SDK fetches it on
+dashboard at [newinstance.cloud](https://newinstance.cloud); the SDK fetches it on
 launch and applies it automatically. You do not need to ship colour values in
 the app.
 
@@ -315,7 +420,7 @@ setting one colour does not discard the others:
 
 ```swift
 let config = try LiveAndAiChatConfig(
-    apiKey: "sk_live_…",
+    customerToken: token,
     theme: ChatThemeOverride(mode: .dark, sentBubble: "#16A34A")
 )
 ```
@@ -349,32 +454,33 @@ viewer, add:
 ## Error handling
 
 ```swift
-sdk.addDelegate(MyHandler())  // see above
+sdk.addDelegate(MyHandler())
 
-// Or via Combine:
 sdk.$lifecycle
     .sink { lifecycle in
         if lifecycle == .failed {
-            // initialize() failed — show retry CTA
-            // sdk.initialize() will try again
+            showRetryButton()
         }
     }
     .store(in: &bag)
 ```
 
+When `lifecycle` is `.failed`, calling `sdk.initialize()` tries again.
 `LiveAndAiChatError.type` is one of `.network` / `.validation` / `.auth` /
 `.system`. `error.recoverable == true` means a retry has a chance of
 succeeding.
 
 `error.code` carries the raw GraphQL or transport code; call
 `error.sdkCode(usingIdentityToken:)` to normalise onto the stable
-`ChatErrorCode` vocabulary shared with every other chat SDK. Nothing on this
-channel is shown inside the chat interface, and it never contains the API key,
-the identity token, or customer data.
+`ChatErrorCode` vocabulary shared with every other chat SDK. Pass
+`usingIdentityToken: config.authMode == .customerToken`: an auth failure alone
+cannot tell a rejected key from a rejected token, and the two need different
+fixes. Nothing on this channel is shown inside the chat interface, and it
+never contains the API key secret, the customer token, or customer data.
 
 ```swift
 func didEncounterError(_ error: LiveAndAiChatError) {
-    switch error.sdkCode(usingIdentityToken: true) {
+    switch error.sdkCode(usingIdentityToken: config.authMode == .customerToken) {
     case ChatErrorCode.invalidIdentityToken: refreshChatToken()
     case ChatErrorCode.invalidPublicKey: reportMisconfiguration()
     default: break
@@ -382,14 +488,22 @@ func didEncounterError(_ error: LiveAndAiChatError) {
 }
 ```
 
+Auth failures (HTTP 401, or a GraphQL error with `extensions.code ==
+"UNAUTHENTICATED"`) arrive with `type == .auth`. That includes a token that
+expires or is revoked mid-session: the realtime subscription reports it, the
+SDK emits the `.auth` error and stops reconnecting with that token. Call
+`setUserToken(_:)` with a fresh token to resume; the SDK reconnects and, if
+initialization had failed, runs it again.
+
 | `ChatErrorCode` | What went wrong |
 |---|---|
+| `invalidConfig` (`E_CONFIG`) | The configuration or a `setUserToken` call was invalid; thrown synchronously, see [Configuration errors](#configuration-errors) |
 | `missingWidgetKey` | No API key was supplied |
 | `invalidPublicKey` | The key was rejected: wrong key, wrong environment, revoked, expired |
 | `chatConfigUnavailable` | The key is fine, but the organization has no chat configuration |
 | `chatDisabled` | Chat is switched off in the dashboard |
 | `configFetchFailed` | Remote configuration could not be loaded; the local/built-in theme is in use |
-| `invalidIdentityToken` | The token was malformed, expired, or signed for another organization |
+| `invalidIdentityToken` | The customer token was malformed, expired, revoked, or signed for another organization |
 | `networkError` | The backend could not be reached |
 | `transportError` | The realtime connection dropped |
 | `chatInitializationFailed` | The conversation could not be started |
@@ -397,16 +511,17 @@ func didEncounterError(_ error: LiveAndAiChatError) {
 | `attachmentFailed` | An attachment could not be uploaded |
 | `serverError` | The backend returned something unusable |
 
-Pass `usingIdentityToken: true` when the SDK was configured with a token: an
-auth failure cannot otherwise tell a rejected key from a rejected token, and
-the two need different fixes.
-
 ## Sample app
 
 The repository's `Example/` directory contains a runnable sample app
 demonstrating the full integration. Open `Example/LiveAndAiChatExample.xcodeproj`
-in Xcode 15+.
+in Xcode 15+. No credential is committed. Set the `LAC_EXAMPLE_TOKEN_URL`
+environment variable in the scheme to a backend endpoint that returns
+`{ "token": "..." }` (customer token mode, with a **Refresh token** button that
+calls `setUserToken`), or, for a trusted internal build only, set
+`LAC_EXAMPLE_API_KEY` (or the `LACExampleApiKey` Info.plist entry, empty by
+default) to a full `keyId:secret` key.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

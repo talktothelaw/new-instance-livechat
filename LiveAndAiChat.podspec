@@ -1,15 +1,15 @@
 Pod::Spec.new do |s|
   s.name          = "LiveAndAiChat"
-  s.version       = "0.3.0"
-  s.summary       = "Native iOS chat SDK — AI + live agent, drop-in SwiftUI screen."
+  s.version       = "0.4.0"
+  s.summary       = "Native iOS chat SDK: AI + live agent, drop-in SwiftUI screen."
   s.description   = <<~DESC
     LiveAndAiChat is a complete iOS chat SDK for newinstance.cloud. It ships a
     SwiftUI chat screen, typing indicators, image and file attachments, an
     in-app image viewer, a two-tier image cache, and a transport stack
     resilient to flaky networks (HTTP/1.1-pinned Server-Sent Events with
     WebSocket fallback, silent gap-fill resync, exponential reconnect).
-    Branding and behaviour are configured from the newinstance.cloud dashboard
-    — your app just supplies an API key and a user identity.
+    Branding and behaviour are configured from the newinstance.cloud dashboard;
+    your app just supplies a customer token minted by your backend.
   DESC
   s.homepage      = "https://github.com/talktothelaw/new-instance-livechat"
   s.license       = { :type => "MIT", :file => "LICENSE" }

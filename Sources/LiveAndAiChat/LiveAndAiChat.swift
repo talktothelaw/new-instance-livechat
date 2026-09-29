@@ -39,10 +39,11 @@ public final class LiveAndAiChat: ObservableObject {
     }
 
     private let config: LiveAndAiChatConfig
+    let credential: ChatCredential
 
     public var themeOverride: ChatThemeOverride? { config.theme }
     private let gql: GqlClient
-    private let session: SessionManager
+    let session: SessionManager
     private let uploader: FileUploader
     /// Internal — also exposed as ``_store`` so the SwiftUI views in this
     /// module can observe the same `ChatStore` instance the SDK uses.
@@ -56,9 +57,10 @@ public final class LiveAndAiChat: ObservableObject {
 
     private var user: ChatUser?
     private var bootstrap: LiveChatBootstrap?
-    private var subscriptionClient: (any SubscriptionClient)?
+    var subscriptionClient: (any SubscriptionClient)?
     private var connectionSubscription: AnyCancellable?
     private var subscriptionCancellables: Set<AnyCancellable> = []
+    private var stateForwardingCancellables: Set<AnyCancellable> = []
     private var networkSubscription: AnyCancellable?
     private var destroyed = false
     private var opened = false
@@ -134,13 +136,15 @@ public final class LiveAndAiChat: ObservableObject {
     // MARK: - Init
 
     private init(config: LiveAndAiChatConfig, user: ChatUser?) {
+        let credential = ChatCredential(config.auth)
         self.config = config
-        self.user = user
-        self.gql = GqlClient(endpoint: config.gqlEndpoint, apiKey: config.effectiveApiKey)
+        self.credential = credential
+        self.user = config.authMode == .apiKey ? user : nil
+        self.gql = GqlClient(endpoint: config.gqlEndpoint, credential: credential)
         self.session = SessionManager()
         self.store = ChatStore()
         self.attachmentQueue = AttachmentQueue()
-        self.uploader = FileUploader(gql: GqlClient(endpoint: config.gqlEndpoint, apiKey: config.effectiveApiKey))
+        self.uploader = FileUploader(gql: GqlClient(endpoint: config.gqlEndpoint, credential: credential))
         self.networkMonitor = NetworkMonitor()
 
         unreadCancellable = store.$unreadCount
@@ -152,10 +156,10 @@ public final class LiveAndAiChat: ObservableObject {
         // republishes when its read-through properties move.
         store.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &subscriptionCancellables)
+            .store(in: &stateForwardingCancellables)
         attachmentQueue.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &subscriptionCancellables)
+            .store(in: &stateForwardingCancellables)
 
         // Tell the host when the system network drops/restores.
         networkMonitor.start()
@@ -181,10 +185,75 @@ public final class LiveAndAiChat: ObservableObject {
 
     public func setUser(_ user: ChatUser) {
         precondition(!destroyed, "SDK has been destroyed")
+        guard config.authMode == .apiKey else { return }
         self.user = user
         session.customerName = user.customerName
         session.customerEmail = user.customerEmail
         session.customerId = user.customerId
+    }
+
+    public func setUserToken(_ token: String) throws {
+        precondition(!destroyed, "SDK has been destroyed")
+        guard config.authMode == .customerToken else {
+            throw LiveAndAiChatConfig.configError(LiveAndAiChatConfig.setUserTokenInKeyModeMessage)
+        }
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw LiveAndAiChatConfig.configError(LiveAndAiChatConfig.blankCustomerTokenMessage)
+        }
+        let previousIdentity = currentIdentityKey
+        credential.setCustomerToken(trimmed)
+        let newIdentity = currentIdentityKey
+        let identityChanged = previousIdentity != nil && newIdentity != nil && previousIdentity != newIdentity
+        let wasConnected = subscriptionClient != nil
+        stopSubscriptions()
+        if identityChanged {
+            session.clear()
+            clearConversationState()
+        }
+        if identityChanged || lifecycle == .failed {
+            restartInit(clearingSession: identityChanged)
+        } else if wasConnected, let conversationId = session.conversationId {
+            connectTransport()
+            subscribeAll(conversationId: conversationId)
+        }
+    }
+
+    private var currentIdentityKey: String? {
+        switch credential.current {
+        case .customerToken(let token): return unverifiedTokenSubject(token)
+        case .apiKey: return user.flatMap { $0.customerId ?? $0.customerEmail }
+        }
+    }
+
+    private func stopSubscriptions() {
+        subscriptionClient?.stop()
+        subscriptionClient = nil
+        subscriptionCancellables.removeAll()
+        connectionSubscription = nil
+    }
+
+    private func clearConversationState() {
+        let wasOpen = store.widgetOpen
+        store.reset()
+        if wasOpen { store.openWidget() }
+    }
+
+    private func restartInit(clearingSession: Bool) {
+        guard lifecycle != .notStarted else { return }
+        let previous = initTask
+        lifecycle = .initializing
+        initTask = Task { [weak self] in
+            await previous?.value
+            guard let self, !self.destroyed else { return }
+            if clearingSession {
+                self.session.clear()
+                self.clearConversationState()
+            }
+            self.stopSubscriptions()
+            self.lifecycle = .initializing
+            await self.runInit()
+        }
     }
 
     /// Kick off init in the background so a subsequent `openChat()` is
@@ -593,17 +662,19 @@ public final class LiveAndAiChat: ObservableObject {
     private func ensureSession() async throws -> String {
         // User mismatch detection: wipe stored session when the host
         // sets a different identity from what's persisted.
-        if let u = user {
-            let currentIdentity = u.identityKey
-            if !currentIdentity.isEmpty,
+        if user != nil || config.authMode == .customerToken {
+            let currentIdentity = currentIdentityKey
+            if let currentIdentity,
                let savedIdentity = session.identityKey,
                savedIdentity != currentIdentity {
                 session.clear()
             }
-            session.customerName = u.customerName
-            session.customerEmail = u.customerEmail
-            session.customerId = u.customerId
-            session.identityKey = currentIdentity.isEmpty ? nil : currentIdentity
+            if let u = user {
+                session.customerName = u.customerName
+                session.customerEmail = u.customerEmail
+                session.customerId = u.customerId
+            }
+            session.identityKey = currentIdentity
         }
 
         if let savedConv = session.conversationId {
@@ -623,13 +694,7 @@ public final class LiveAndAiChat: ObservableObject {
         }
 
         // Fresh init.
-        let u = user ?? ChatUser(customerName: "Guest")
-        var input: [String: Any] = ["customerName": u.customerName]
-        if let v = u.customerToken, !v.isEmpty { input["customerToken"] = v }
-        if let v = u.customerEmail { input["customerEmail"] = v }
-        if let v = u.customerId { input["customerId"] = v }
-        if let v = config.initialMessage { input["initialMessage"] = v }
-        let data = try await gql.execute(query: Operations.initChat, variables: ["input": input])
+        let data = try await gql.execute(query: Operations.initChat, variables: ["input": initChatInput()])
         guard let result = data["initCsAiChat"] as? [String: Any],
               let convId = result["conversationId"] as? String, !convId.isEmpty
         else {
@@ -647,6 +712,18 @@ public final class LiveAndAiChat: ObservableObject {
             await MainActor.run { self.store.setInitialMessages(decoded) }
         }
         return convId
+    }
+
+    func initChatInput() -> [String: Any] {
+        var input: [String: Any] = [:]
+        if config.authMode == .apiKey {
+            let u = user ?? ChatUser(customerName: "Guest")
+            input["customerName"] = u.customerName
+            if let v = u.customerEmail { input["customerEmail"] = v }
+            if let v = u.customerId { input["customerId"] = v }
+        }
+        if let v = config.initialMessage { input["initialMessage"] = v }
+        return input
     }
 
     private func loadInitialHistory(conversationId: String) async {
@@ -728,7 +805,7 @@ public final class LiveAndAiChat: ObservableObject {
             SseLog.debug("connectTransport using WebSocket → \(config.wsEndpoint.absoluteString)")
             client = WsSubscriptionClient(
                 endpoint: config.wsEndpoint,
-                apiKey: config.effectiveApiKey,
+                credential: credential,
                 reconnect: policy,
                 heartbeatTimeoutMs: timeout
             )
@@ -736,10 +813,15 @@ public final class LiveAndAiChat: ObservableObject {
             SseLog.debug("connectTransport using SSE → \(config.sseEndpoint.absoluteString)")
             client = SseSubscriptionClient(
                 endpoint: config.sseEndpoint,
-                apiKey: config.effectiveApiKey,
+                credential: credential,
                 reconnect: policy,
                 heartbeatTimeoutMs: timeout
             )
+        }
+        client.onAuthFailure = { [weak self] message in
+            Task { @MainActor in
+                self?.emitError(LiveAndAiChatError(type: .auth, message: message, recoverable: false, code: "UNAUTHENTICATED"))
+            }
         }
         subscriptionClient = client
         connectionSubscription = client.connectionStatePublisher
@@ -1042,7 +1124,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// the same `sdk.openChat()` pattern as on Android.
     @MainActor public static func current() -> LiveAndAiChat? { currentInstance }
 
-    public static let version = "0.2.0"
+    nonisolated public static let version = "0.4.0"
 }
 
 /// Callback-style delegate alternative to Combine subscriptions. Optional

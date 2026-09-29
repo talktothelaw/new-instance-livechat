@@ -36,20 +36,21 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
     }
 
     private let endpoint: URL
-    private let apiKey: String
+    let credential: ChatCredential
     private let reconnect: ReconnectPolicy
     private let heartbeatTimeoutMs: Int
     private let session: URLSession
+    var onAuthFailure: ((String) -> Void)?
 
     init(
         endpoint: URL,
-        apiKey: String,
+        credential: ChatCredential,
         reconnect: ReconnectPolicy = ReconnectPolicy(),
         heartbeatTimeoutMs: Int = 30_000,
         urlSessionConfig: URLSessionConfiguration = .ephemeral
     ) {
         self.endpoint = endpoint
-        self.apiKey = apiKey
+        self.credential = credential
         self.reconnect = reconnect
         self.heartbeatTimeoutMs = heartbeatTimeoutMs
         let cfg = urlSessionConfig
@@ -62,6 +63,7 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
 
     private let queue = DispatchQueue(label: "cloud.newinstance.liveandaichat.ws", qos: .utility)
     private var stopped = false
+    private(set) var authFailed = false
     private var connectTask: Task<Void, Never>?
     private var task: URLSessionWebSocketTask?
     private var watchdogTimer: DispatchSourceTimer?
@@ -127,14 +129,14 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
     // MARK: - Connect loop
 
     private func connectLoop() async {
-        while !stopped {
+        while !stopped && !authFailed {
             _connectionState.send(.connecting)
             openWs()
             // Wait for the task to disconnect.
             while !stopped, task != nil {
                 try? await Task.sleep(nanoseconds: 500 * 1_000_000)
             }
-            if stopped { break }
+            if stopped || authFailed { break }
             attempts += 1
             if attempts > reconnect.maxAttempts {
                 _connectionState.send(.disconnected)
@@ -145,18 +147,22 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
         }
     }
 
-    private func openWs() {
+    func upgradeRequest() -> URLRequest {
         var req = URLRequest(url: endpoint)
+        req.allHTTPHeaderFields = credential.headers()
         req.setValue("graphql-transport-ws", forHTTPHeaderField: "Sec-WebSocket-Protocol")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        // ngrok-free interstitial guard — same as the SSE path.
         req.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
-        req.setValue("LiveAndAiChat-iOS/1.0", forHTTPHeaderField: "User-Agent")
-        let t = session.webSocketTask(with: req)
+        return req
+    }
+
+    static let connectionInitFrame: [String: Any] = ["type": "connection_init", "payload": [String: Any]()]
+
+    private func openWs() {
+        let t = session.webSocketTask(with: upgradeRequest())
         task = t
         WsLog.debug("WS open → \(endpoint.absoluteString)")
         t.resume()
-        sendFrame(["type": "connection_init", "payload": ["apiKey": apiKey]])
+        sendFrame(Self.connectionInitFrame)
         receiveLoop()
     }
 
@@ -166,6 +172,10 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
             guard let self else { return }
             switch result {
             case .failure:
+                let status = (t.response as? HTTPURLResponse)?.statusCode
+                if status == 401 || status == 403 || t.closeCode.rawValue == 4401 || t.closeCode.rawValue == 4403 {
+                    self.failAuth("WebSocket rejected the credential")
+                }
                 self.handleClose()
                 return
             case .success(let message):
@@ -176,7 +186,7 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
         }
     }
 
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
+    func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         let text: String
         switch message {
         case .string(let s): text = s
@@ -205,6 +215,14 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
             opsLock.lock()
             let op = operations[opId]
             opsLock.unlock()
+            if let message = unauthenticatedMessage(inGraphQLErrors: type == "error" ? obj["payload"] : (obj["payload"] as? [String: Any])?["errors"]) {
+                failAuth(message)
+                task?.cancel(with: .normalClosure, reason: nil)
+                task = nil
+                watchdogTimer?.cancel()
+                watchdogTimer = nil
+                return
+            }
             switch type {
             case "next":
                 if let payload = obj["payload"] as? [String: Any],
@@ -231,7 +249,15 @@ final class WsSubscriptionClient: NSObject, SubscriptionClient {
     private func handleClose() {
         WsLog.debug("WS closed (stopped=\(stopped))")
         task = nil
-        if !stopped { _connectionState.send(.disconnected) }
+        if !stopped && !authFailed { _connectionState.send(.disconnected) }
+    }
+
+    private func failAuth(_ message: String) {
+        if authFailed || stopped { return }
+        authFailed = true
+        WsLog.warn("WS auth rejected, not reconnecting until the credential changes")
+        _connectionState.send(.disconnected)
+        onAuthFailure?(message)
     }
 
     private func sendFrame(_ frame: [String: Any]) {
