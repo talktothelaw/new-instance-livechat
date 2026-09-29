@@ -4,6 +4,34 @@ import UIKit
 import PhotosUI
 import LiveAndAiChat
 
+struct ExampleLauncher: View {
+    @State private var config: LiveAndAiChatConfig?
+    @State private var failure: String?
+
+    var body: some View {
+        if let config {
+            RootView(config: config)
+        } else if let failure {
+            Text(failure)
+                .font(.system(size: 14))
+                .padding()
+        } else {
+            ProgressView("Signing in to chat")
+                .onAppear(perform: load)
+        }
+    }
+
+    private func load() {
+        Task { @MainActor in
+            do {
+                config = try await RootView.makeConfig()
+            } catch {
+                failure = "Set LAC_EXAMPLE_API_KEY (keyId:secret, trusted internal builds only) or point LAC_EXAMPLE_TOKEN_URL at your backend's chat token endpoint."
+            }
+        }
+    }
+}
+
 /// Sample host UI. Mirrors the Android `HeadlessSampleActivity` flow:
 ///   1. Build a `LiveAndAiChat` instance with the dev API key.
 ///   2. Call `initialize()` on launch so the heavy config fetch happens
@@ -15,6 +43,7 @@ import LiveAndAiChat
 struct RootView: View {
 
     @StateObject private var sdk: LiveAndAiChat
+    private let authMode: ChatAuthMode
     @State private var showChat = false
     @State private var showAttachmentChooser = false
     @State private var showFilePicker = false
@@ -23,25 +52,16 @@ struct RootView: View {
     @State private var shareItems: [Any] = []
     @State private var log: [String] = []
 
-    init() {
-        // SSE again — the SDK now uses HTTP1EventSource (Network.framework
-        // + NWConnection with TLS ALPN pinned to `http/1.1`), which
-        // bypasses iOS URLSession's HTTP/2-only behaviour and works
-        // through ngrok-free / any HTTP/1.1-aware proxy. Set
-        // `transport: .ws` if you want to force WebSocket instead.
-        let config = try! LiveAndAiChatConfig(
-            apiKey: Self.exampleApiKey,
-            baseUrl: Self.exampleBaseUrl,
-            transport: .sse
-        )
-        let instance = try! LiveAndAiChat.Builder()
-            .config(config)
-            .user(ChatUser(
+    init(config: LiveAndAiChatConfig) {
+        let builder = LiveAndAiChat.Builder().config(config)
+        if config.authMode == .apiKey {
+            _ = builder.user(ChatUser(
                 customerName: "Sample User",
                 customerEmail: "sample@example.com"
             ))
-            .build()
-        _sdk = StateObject(wrappedValue: instance)
+        }
+        authMode = config.authMode
+        _sdk = StateObject(wrappedValue: try! builder.build())
     }
 
     var body: some View {
@@ -119,6 +139,11 @@ struct RootView: View {
             .padding()
             .navigationTitle("LiveAndAiChat")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if authMode == .customerToken {
+                    Button("Refresh token", action: refreshToken)
+                }
+            }
         }
         .sheet(isPresented: $showShareSheet) {
             ActivityShareSheet(activityItems: shareItems)
@@ -245,6 +270,17 @@ struct RootView: View {
         showChat = true
     }
 
+    private func refreshToken() {
+        Task { @MainActor in
+            do {
+                try sdk.setUserToken(try await Self.fetchCustomerToken())
+                appendLog("TOKEN refreshed")
+            } catch {
+                appendLog("ERR [token] \((error as? LiveAndAiChatError)?.message ?? error.localizedDescription)")
+            }
+        }
+    }
+
     private func attachListener() {
         let listener = ExampleListener { line in
             appendLog(line)
@@ -277,7 +313,7 @@ struct RootView: View {
         conversation: \(sdk.conversation?.id ?? "—")
         messages: \(sdk.messages.count)
         baseUrl: \(Self.exampleBaseUrl)
-        keyPrefix: \(Self.exampleApiKey.prefix(12))…
+        authMode: \(authMode)
         ===
         """
         shareItems = [header + "\n\n" + log.joined(separator: "\n")]
@@ -342,6 +378,35 @@ struct RootView: View {
     }()
 
     static let exampleBaseUrl = "https://emerging-fleet-vervet.ngrok-free.app"
+
+    static let exampleTokenUrl: URL = {
+        if let env = ProcessInfo.processInfo.environment["LAC_EXAMPLE_TOKEN_URL"], let url = URL(string: env) {
+            return url
+        }
+        return URL(string: "https://your-backend.example.com/chat/token")!
+    }()
+
+    static func makeConfig() async throws -> LiveAndAiChatConfig {
+        if !exampleApiKey.isEmpty {
+            return try LiveAndAiChatConfig(apiKey: exampleApiKey, baseUrl: exampleBaseUrl, transport: .sse)
+        }
+        return try LiveAndAiChatConfig(
+            customerToken: try await fetchCustomerToken(),
+            baseUrl: exampleBaseUrl,
+            transport: .sse
+        )
+    }
+
+    static func fetchCustomerToken() async throws -> String {
+        var request = URLRequest(url: exampleTokenUrl)
+        request.httpMethod = "POST"
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let body = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let token = body?["token"] as? String, !token.isEmpty else {
+            throw URLError(.badServerResponse)
+        }
+        return token
+    }
 }
 
 /// Holds a strong reference to delegates so they aren't deallocated.

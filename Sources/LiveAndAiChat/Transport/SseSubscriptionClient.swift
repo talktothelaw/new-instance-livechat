@@ -44,20 +44,21 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
     // MARK: - Construction
 
     private let endpoint: URL
-    private let apiKey: String
+    let credential: ChatCredential
     private let reconnect: ReconnectPolicy
     private let heartbeatTimeoutMs: Int
     private let session: URLSession
+    var onAuthFailure: ((String) -> Void)?
 
     init(
         endpoint: URL,
-        apiKey: String,
+        credential: ChatCredential,
         reconnect: ReconnectPolicy = ReconnectPolicy(),
         heartbeatTimeoutMs: Int = 30_000,
         urlSessionConfig: URLSessionConfiguration = .ephemeral
     ) {
         self.endpoint = endpoint
-        self.apiKey = apiKey
+        self.credential = credential
         self.reconnect = reconnect
         self.heartbeatTimeoutMs = heartbeatTimeoutMs
         let cfg = urlSessionConfig
@@ -72,6 +73,7 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
 
     private let queue = DispatchQueue(label: "cloud.newinstance.liveandaichat.sse", qos: .utility)
     private var stopped = false
+    private(set) var authFailed = false
     private var connectTask: Task<Void, Never>?
     private var watchdogTimer: DispatchSourceTimer?
     /// The streaming GET connection. Closed by the server (via `complete`
@@ -185,16 +187,16 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
     // MARK: - Connect loop
 
     private func connectLoop() async {
-        while !stopped {
+        while !stopped && !authFailed {
             SseLog.debug("connectLoop attempt=\(attempts + 1)/\(reconnect.maxAttempts)")
             _connectionState.send(.connecting)
             let ok = await reserveToken()
             if !ok {
                 _connectionState.send(.disconnected)
-            } else {
+            } else if !authFailed {
                 await openStreamAndWait()
             }
-            if stopped { break }
+            if stopped || authFailed { break }
             attempts += 1
             if attempts > reconnect.maxAttempts {
                 SseLog.warn("connectLoop exhausted attempts (\(attempts)) — giving up")
@@ -210,16 +212,16 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
     private func reserveToken() async -> Bool {
         var req = URLRequest(url: endpoint)
         req.httpMethod = "PUT"
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        // ngrok-free's interstitial otherwise breaks streaming behind
-        // dev tunnels. No-op against any non-ngrok backend.
-        req.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
-        req.setValue("LiveAndAiChat-iOS/1.0", forHTTPHeaderField: "User-Agent")
+        req.allHTTPHeaderFields = requestHeaders()
         req.httpBody = Data()
         do {
             let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                if code == 401 || code == 403 {
+                    failAuth("HTTP \(code)")
+                    return false
+                }
                 let body = String(data: data, encoding: .utf8) ?? ""
                 SseLog.warn("reserveToken http=\(code) body=\(body.prefix(200))")
                 return false
@@ -253,12 +255,7 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
     private func openStreamAndWait() async {
         guard let t = token else { return }
 
-        let headers: [String: String] = [
-            "x-api-key": apiKey,
-            "X-GraphQL-Event-Stream-Token": t,
-            "ngrok-skip-browser-warning": "true",
-            "User-Agent": "LiveAndAiChat-iOS/1.0",
-        ]
+        let headers = requestHeaders(streamToken: t)
 
         // HTTP1EventSource pins TLS ALPN to `http/1.1` — the server
         // cannot negotiate HTTP/2, so the response streams through
@@ -281,6 +278,9 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
         }
         es.onComplete = { [weak self] statusCode, error in
             SseLog.debug("HTTP1EventSource complete code=\(statusCode ?? -1) err=\(error?.localizedDescription ?? "nil")")
+            if statusCode == 401 || statusCode == 403 {
+                self?.failAuth("HTTP \(statusCode ?? 401)")
+            }
             self?.onStreamClosed()
         }
 
@@ -356,7 +356,7 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
         }
     }
 
-    private func onStreamEvent(name: String?, data: String) {
+    func onStreamEvent(name: String?, data: String) {
         lastEventAt = Date()
         guard !data.isEmpty else { return }
         guard let bytes = data.data(using: .utf8) else {
@@ -382,6 +382,15 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
                 SseLog.warn("next opId=\(opId.suffix(8)) not in \(opCount) live ops")
             }
             if let payload = obj["payload"] as? [String: Any] {
+                if let message = unauthenticatedMessage(inGraphQLErrors: payload["errors"]) {
+                    failAuth(message)
+                    eventSource?.disconnect()
+                    eventSource = nil
+                    watchdogTimer?.cancel()
+                    watchdogTimer = nil
+                    resumeStreamClosed()
+                    return
+                }
                 if let errors = payload["errors"] {
                     SseLog.warn("next opId=\(opId.suffix(8)) errors=\(errors)")
                 }
@@ -408,12 +417,20 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
         }
     }
 
+    private func failAuth(_ message: String) {
+        if authFailed || stopped { return }
+        authFailed = true
+        SseLog.warn("auth rejected, not reconnecting until the credential changes")
+        _connectionState.send(.disconnected)
+        onAuthFailure?(message)
+    }
+
     private func onStreamClosed() {
         queue.async { [weak self] in
             guard let self else { return }
             SseLog.debug("stream CLOSED (stopped=\(self.stopped))")
             self.eventSource = nil
-            if !self.stopped { self._connectionState.send(.disconnected) }
+            if !self.stopped && !self.authFailed { self._connectionState.send(.disconnected) }
             self.resumeStreamClosed()
         }
     }
@@ -452,11 +469,8 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
         body["extensions"] = ["operationId": opId]
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
+        req.allHTTPHeaderFields = requestHeaders(streamToken: t)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue(t, forHTTPHeaderField: "X-GraphQL-Event-Stream-Token")
-        req.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
-        req.setValue("LiveAndAiChat-iOS/1.0", forHTTPHeaderField: "User-Agent")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body, options: [])
         let task = session.dataTask(with: req) { data, response, error in
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
@@ -481,11 +495,15 @@ final class SseSubscriptionClient: NSObject, SubscriptionClient {
         guard let url = comps.url else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue(t, forHTTPHeaderField: "X-GraphQL-Event-Stream-Token")
-        req.setValue("true", forHTTPHeaderField: "ngrok-skip-browser-warning")
-        req.setValue("LiveAndAiChat-iOS/1.0", forHTTPHeaderField: "User-Agent")
+        req.allHTTPHeaderFields = requestHeaders(streamToken: t)
         session.dataTask(with: req).resume()
+    }
+
+    func requestHeaders(streamToken: String? = nil) -> [String: String] {
+        var headers = credential.headers()
+        headers["ngrok-skip-browser-warning"] = "true"
+        if let streamToken { headers["X-GraphQL-Event-Stream-Token"] = streamToken }
+        return headers
     }
 }
 

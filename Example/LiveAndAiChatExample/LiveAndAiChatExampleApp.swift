@@ -4,7 +4,7 @@ import SwiftUI
 struct LiveAndAiChatExampleApp: App {
     var body: some Scene {
         WindowGroup {
-            RootView()
+            ExampleLauncher()
         }
     }
 }

@@ -7,12 +7,12 @@ import Foundation
 /// types because the SDK already pins selection sets in ``Operations``.
 final class GqlClient {
     private let endpoint: URL
-    private let apiKey: String
+    let credential: ChatCredential
     private let session: URLSession
 
-    init(endpoint: URL, apiKey: String, session: URLSession = .shared) {
+    init(endpoint: URL, credential: ChatCredential, session: URLSession = .shared) {
         self.endpoint = endpoint
-        self.apiKey = apiKey
+        self.credential = credential
         self.session = session
     }
 
@@ -31,9 +31,9 @@ final class GqlClient {
 
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
+        request.allHTTPHeaderFields = credential.headers()
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
 
         let (data, response): (Data, URLResponse)
@@ -50,20 +50,21 @@ final class GqlClient {
 
         let http = response as? HTTPURLResponse
         let status = http?.statusCode ?? -1
+        let authRejected = status == 401 || status == 403
 
         if data.isEmpty {
             throw LiveAndAiChatError(
-                type: status >= 500 ? .system : .network,
+                type: authRejected ? .auth : (status >= 500 ? .system : .network),
                 message: "Empty response (HTTP \(status))",
-                recoverable: status != 401 && status != 403
+                recoverable: !authRejected
             )
         }
 
         guard let parsed = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
             throw LiveAndAiChatError(
-                type: .system,
-                message: "Malformed JSON from server",
-                recoverable: true
+                type: authRejected ? .auth : .system,
+                message: authRejected ? "HTTP \(status)" : "Malformed JSON from server",
+                recoverable: !authRejected
             )
         }
 
@@ -92,7 +93,7 @@ final class GqlClient {
             case "INTERNAL_SERVER_ERROR":
                 type = .system
             default:
-                type = (status >= 500) ? .system : .network
+                type = authRejected ? .auth : (status >= 500 ? .system : .network)
             }
             throw LiveAndAiChatError(
                 type: type,
@@ -105,7 +106,7 @@ final class GqlClient {
 
         if status >= 400 {
             let type: ChatErrorType
-            if status == 401 || status == 403 { type = .auth }
+            if authRejected { type = .auth }
             else if status >= 500 { type = .system }
             else { type = .network }
             throw LiveAndAiChatError(

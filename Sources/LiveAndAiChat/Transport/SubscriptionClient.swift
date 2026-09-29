@@ -24,6 +24,7 @@ struct SubscriptionRequest {
 /// publisher even across transport flaps.
 protocol SubscriptionClient: AnyObject {
     var connectionStatePublisher: AnyPublisher<ConnectionState, Never> { get }
+    var onAuthFailure: ((String) -> Void)? { get set }
     func start()
     func stop()
     func subscribe(_ request: SubscriptionRequest) -> AnyPublisher<[String: Any], Never>

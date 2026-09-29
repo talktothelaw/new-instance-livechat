@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// Transport selection mode. When ``LiveAndAiChatConfig/transport`` is nil
 /// the SDK respects the value advertised in the server bootstrap, falling
@@ -17,55 +16,26 @@ public struct ChatUser: Sendable, Equatable {
     public let customerName: String
     public let customerId: String?
     public let customerEmail: String?
-    public let customerToken: String?
 
     public init(
         customerName: String,
         customerId: String? = nil,
-        customerEmail: String? = nil,
-        customerToken: String? = nil
+        customerEmail: String? = nil
     ) {
         precondition(!customerName.isEmpty, "ChatUser.customerName is required and cannot be blank.")
         self.customerName = customerName
         self.customerId = customerId
         self.customerEmail = customerEmail
-        self.customerToken = customerToken
-    }
-
-    public static func fromToken(_ token: String) -> ChatUser {
-        ChatUser(customerName: "Customer", customerToken: token)
-    }
-
-    var identityKey: String {
-        if let token = customerToken, let sub = unverifiedTokenSubject(token) { return sub }
-        return customerId ?? customerEmail ?? ""
     }
 }
 
-func unverifiedTokenSubject(_ token: String) -> String? {
-    let parts = token.split(separator: ".")
-    guard parts.count == 3 else { return nil }
-    var b64 = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
-    while b64.count % 4 != 0 { b64 += "=" }
-    guard let data = Data(base64Encoded: b64),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let sub = object["sub"] as? String,
-          !sub.isEmpty else { return nil }
-    return sub
+public enum ChatAuthMode: Sendable {
+    case apiKey
+    case customerToken
 }
 
-/// SDK configuration. Only ``apiKey`` is required for production usage —
-/// `baseUrl` defaults to the production NewInstance host and is rejected
-/// at construction time if a release SDK build tries to point at any other
-/// origin. Debug builds may override for local-server testing.
-public struct LiveAndAiChatConfig: Sendable {
-    /// The API key ID for this organization (e.g. `sk_live_abc123`).
-    /// Because the SDK ships embedded in customer apps, the key SHOULD be
-    /// the keyId-only form — `keyId:secret` exposes the secret to anyone
-    /// who can decompile the app. If a `keyId:secret` form is supplied here,
-    /// the SDK strips the secret half and logs a warning instead of
-    /// crashing the host app.
-    public let apiKey: String
+public struct LiveAndAiChatConfig: Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    let auth: ChatAuth
 
     /// Backend base URL. Defaults to ``LiveAndAiChatConfig/defaultBaseUrl``.
     /// Custom values are accepted in debug builds only; release builds throw
@@ -89,7 +59,8 @@ public struct LiveAndAiChatConfig: Sendable {
     public let theme: ChatThemeOverride?
 
     public init(
-        apiKey: String,
+        apiKey: String? = nil,
+        customerToken: String? = nil,
         baseUrl: String = LiveAndAiChatConfig.defaultBaseUrl,
         gqlPath: String = "/service",
         ssePath: String = "/graphql/stream",
@@ -99,22 +70,19 @@ public struct LiveAndAiChatConfig: Sendable {
         allowRemoteAttachmentUrls: Bool = false,
         theme: ChatThemeOverride? = nil
     ) throws {
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedKey.isEmpty {
-            throw LiveAndAiChatError(
-                type: .validation,
-                message: "apiKey must not be blank",
-                recoverable: false
-            )
-        }
-        if trimmedKey.contains(":") {
-            // Don't crash — warn so misconfigured builds keep working while
-            // developers see the issue. Matches Android `LiveAndAiChatConfig`.
-            Self.log.warning("""
-                apiKey contains ':' — embedding the keyId:secret form in an iOS app exposes \
-                the secret to any user with access to the IPA. The SDK will use the keyId \
-                portion only (chat-widget mode). Use the keyId-only form (e.g. sk_live_xxx).
-                """)
+        let key = Self.nonBlank(apiKey)
+        let token = Self.nonBlank(customerToken)
+        switch (key, token) {
+        case let (key?, nil):
+            guard let colon = key.firstIndex(of: ":"),
+                  !key[..<colon].trimmingCharacters(in: .whitespaces).isEmpty,
+                  !key[key.index(after: colon)...].trimmingCharacters(in: .whitespaces).isEmpty
+            else { throw Self.configError(Self.malformedApiKeyMessage) }
+            self.auth = .apiKey(key)
+        case let (nil, token?):
+            self.auth = .customerToken(token)
+        default:
+            throw Self.configError(Self.exclusiveModeMessage)
         }
         guard baseUrl.hasPrefix("http://") || baseUrl.hasPrefix("https://") else {
             throw LiveAndAiChatError(
@@ -131,7 +99,6 @@ public struct LiveAndAiChatConfig: Sendable {
                 recoverable: false
             )
         }
-        self.apiKey = trimmedKey
         self.baseUrl = baseUrl
         self.gqlPath = gqlPath
         self.ssePath = ssePath
@@ -142,13 +109,40 @@ public struct LiveAndAiChatConfig: Sendable {
         self.theme = theme
     }
 
-    /// The value sent on `x-api-key`. If the host passed a `keyId:secret`
-    /// pair we strip the secret half — never embed it in an iOS request.
-    /// Stripped value matches what the backend's `validateApiKey` treats
-    /// as widget-mode auth.
-    var effectiveApiKey: String {
-        guard let colonIdx = apiKey.firstIndex(of: ":") else { return apiKey }
-        return String(apiKey[..<colonIdx]).trimmingCharacters(in: .whitespaces)
+    public var authMode: ChatAuthMode {
+        switch auth {
+        case .apiKey: return .apiKey
+        case .customerToken: return .customerToken
+        }
+    }
+
+    public var description: String {
+        let credential: String
+        switch auth {
+        case .apiKey(let key): credential = "apiKey: \(key.prefix { $0 != ":" }):***"
+        case .customerToken: credential = "customerToken: ***"
+        }
+        return "LiveAndAiChatConfig(authMode: \(authMode), \(credential), baseUrl: \(baseUrl), transport: \(transport?.rawValue ?? "auto"))"
+    }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror {
+        Mirror(self, children: ["description": description], displayStyle: .struct)
+    }
+
+    static let exclusiveModeMessage = "pass either apiKey (keyId:secret) or customerToken"
+    static let malformedApiKeyMessage = "apiKey must be keyId:secret, or use customerToken"
+    static let setUserTokenInKeyModeMessage = "setUserToken is only available when the SDK is configured with customerToken"
+    static let blankCustomerTokenMessage = "customerToken must not be blank"
+
+    static func configError(_ message: String) -> LiveAndAiChatError {
+        LiveAndAiChatError(type: .validation, message: message, recoverable: false, code: ChatErrorCode.invalidConfig)
+    }
+
+    private static func nonBlank(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     public var gqlEndpoint: URL {
@@ -181,6 +175,4 @@ public struct LiveAndAiChatConfig: Sendable {
         return false
         #endif
     }
-
-    private static let log = Logger(subsystem: "cloud.newinstance.liveandaichat", category: "Config")
 }
