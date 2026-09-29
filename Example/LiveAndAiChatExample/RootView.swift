@@ -84,6 +84,10 @@ struct RootView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .disabled(sdk.lifecycle == .initializing)
+                Button("Open chat (UIKit)", action: presentChatFromUIKit)
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(maxWidth: .infinity)
+                    .disabled(sdk.lifecycle == .initializing)
                 Divider()
                 HStack(spacing: 8) {
                     Text("Event log")
@@ -145,6 +149,7 @@ struct RootView: View {
                 }
             }
         }
+        .navigationViewStyle(StackNavigationViewStyle())
         .sheet(isPresented: $showShareSheet) {
             ActivityShareSheet(activityItems: shareItems)
         }
@@ -268,6 +273,16 @@ struct RootView: View {
     private func openChat() {
         sdk.openChat()
         showChat = true
+    }
+
+    private func presentChatFromUIKit() {
+        let root = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .rootViewController
+        guard let root else { return }
+        sdk.present(from: root)
     }
 
     private func refreshToken() {
@@ -437,6 +452,9 @@ final class ExampleListener: LiveAndAiChatDelegate {
     }
     func didEncounterError(_ error: LiveAndAiChatError) {
         onLine("ERR [\(error.type)] \(error.message)")
+    }
+    func chatDidClose(_ event: ChatCloseEvent) {
+        onLine("CLOSED \(event.reason.rawValue) by \(event.initiator.rawValue)")
     }
 }
 

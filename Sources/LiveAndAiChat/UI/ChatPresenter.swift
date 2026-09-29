@@ -1,5 +1,17 @@
 import SwiftUI
 
+enum ChatCardLayout {
+    static let maxSize = CGSize(width: 400, height: 620)
+    static let margin: CGFloat = 20
+
+    static func frame(in area: CGRect, rightToLeft: Bool) -> CGRect {
+        let width = max(0, min(maxSize.width, area.width - margin * 2))
+        let height = max(0, min(maxSize.height, area.height - margin * 2))
+        let x = rightToLeft ? area.minX + margin : area.maxX - margin - width
+        return CGRect(x: x, y: area.maxY - margin - height, width: width, height: height)
+    }
+}
+
 #if canImport(UIKit)
 import UIKit
 import UniformTypeIdentifiers
@@ -22,7 +34,13 @@ public extension LiveAndAiChat {
         var top = host
         while let presented = top.presentedViewController { top = presented }
         let presenter = ChatPresentingController(sdk: self)
-        presenter.modalPresentationStyle = .fullScreen
+        let traits = top.traitCollection
+        if traits.horizontalSizeClass == .regular, traits.verticalSizeClass == .regular {
+            presenter.modalPresentationStyle = .custom
+            presenter.transitioningDelegate = presenter
+        } else {
+            presenter.modalPresentationStyle = .fullScreen
+        }
         presentedChatController = presenter
         top.present(presenter, animated: true) { [weak self] in
             self?.openChat()
@@ -75,6 +93,13 @@ final class ChatPresentingController: UIViewController, UIAdaptivePresentationCo
         self.hosting = host
     }
 
+    private func closeFromBackdrop() {
+        guard !dismissalHandled else { return }
+        dismissalHandled = true
+        sdk.markClosed(reason: .gesture, initiator: .user)
+        dismiss(animated: true)
+    }
+
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
         dismissalHandled = true
         sdk.markClosed(reason: .gesture, initiator: .user)
@@ -94,6 +119,108 @@ final class ChatPresentingController: UIViewController, UIAdaptivePresentationCo
         picker.delegate = self
         picker.allowsMultipleSelection = true
         present(picker, animated: true)
+    }
+}
+
+extension ChatPresentingController: UIViewControllerTransitioningDelegate {
+    func presentationController(
+        forPresented presented: UIViewController,
+        presenting: UIViewController?,
+        source: UIViewController
+    ) -> UIPresentationController? {
+        ChatPanelPresentationController(presentedViewController: presented, presenting: presenting) { [weak self] in
+            self?.closeFromBackdrop()
+        }
+    }
+}
+
+@MainActor
+final class ChatPanelPresentationController: UIPresentationController {
+    private let onBackdropTap: () -> Void
+    private let dimmingView = UIView()
+    private let panelView = UIView()
+    private var keyboardTop = CGFloat.greatestFiniteMagnitude
+
+    init(presentedViewController: UIViewController, presenting: UIViewController?, onBackdropTap: @escaping () -> Void) {
+        self.onBackdropTap = onBackdropTap
+        super.init(presentedViewController: presentedViewController, presenting: presenting)
+        dimmingView.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        dimmingView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(backdropTapped)))
+        panelView.layer.shadowColor = UIColor.black.cgColor
+        panelView.layer.shadowOpacity = 0.35
+        panelView.layer.shadowRadius = 30
+        panelView.layer.shadowOffset = CGSize(width: 0, height: 12)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillChangeFrame(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
+    }
+
+    override var presentedView: UIView? { panelView }
+
+    override var frameOfPresentedViewInContainerView: CGRect {
+        guard let container = containerView else { return .zero }
+        var area = container.bounds.inset(by: container.safeAreaInsets)
+        area.size.height = max(0, min(area.maxY, keyboardTop) - area.minY)
+        return ChatCardLayout.frame(in: area, rightToLeft: container.effectiveUserInterfaceLayoutDirection == .rightToLeft)
+    }
+
+    override func presentationTransitionWillBegin() {
+        guard let container = containerView, let content = presentedViewController.view else { return }
+        dimmingView.frame = container.bounds
+        dimmingView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        dimmingView.alpha = 0
+        container.insertSubview(dimmingView, at: 0)
+        panelView.frame = frameOfPresentedViewInContainerView
+        content.frame = panelView.bounds
+        content.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        content.layer.cornerRadius = 16
+        content.layer.cornerCurve = .continuous
+        content.layer.masksToBounds = true
+        panelView.addSubview(content)
+        animateDimming(to: 1)
+    }
+
+    override func presentationTransitionDidEnd(_ completed: Bool) {
+        if !completed { dimmingView.removeFromSuperview() }
+    }
+
+    override func dismissalTransitionWillBegin() {
+        animateDimming(to: 0)
+    }
+
+    override func dismissalTransitionDidEnd(_ completed: Bool) {
+        if completed { dimmingView.removeFromSuperview() }
+    }
+
+    override func containerViewWillLayoutSubviews() {
+        super.containerViewWillLayoutSubviews()
+        panelView.frame = frameOfPresentedViewInContainerView
+    }
+
+    private func animateDimming(to alpha: CGFloat) {
+        guard let coordinator = presentedViewController.transitionCoordinator else {
+            dimmingView.alpha = alpha
+            return
+        }
+        coordinator.animate(alongsideTransition: { _ in self.dimmingView.alpha = alpha })
+    }
+
+    @objc private func backdropTapped() {
+        onBackdropTap()
+    }
+
+    @objc private func keyboardWillChangeFrame(_ note: Notification) {
+        guard let container = containerView,
+              let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        let top = container.convert(end, from: nil).minY
+        keyboardTop = top < container.bounds.maxY ? top : .greatestFiniteMagnitude
+        let duration = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        UIView.animate(withDuration: duration) {
+            self.panelView.frame = self.frameOfPresentedViewInContainerView
+        }
     }
 }
 

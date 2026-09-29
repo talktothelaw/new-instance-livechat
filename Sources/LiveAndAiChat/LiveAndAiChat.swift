@@ -1124,7 +1124,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// the same `sdk.openChat()` pattern as on Android.
     @MainActor public static func current() -> LiveAndAiChat? { currentInstance }
 
-    nonisolated public static let version = "0.4.0"
+    nonisolated public static let version = "0.4.1"
 }
 
 /// Callback-style delegate alternative to Combine subscriptions. Optional

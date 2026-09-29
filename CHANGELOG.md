@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- On iPad, `present(from:)` now opens the chat as a 400 x 620 pt panel in the bottom-right corner (bottom-left in right-to-left languages) over a dimmed backdrop, matching the web widget, instead of a full-screen column. The panel moves up when the keyboard opens. Tapping the backdrop closes the chat and reports `ChatCloseEvent` reason `gesture`. iPhone, and iPad apps in a narrow Split View or Slide Over window, keep the full-screen chat. React Native and Flutter pick this up through `present(from:)`.
+- The example app gains an "Open chat (UIKit)" button that exercises `present(from:)`, logs close events, and shows its content on iPad (it previously rendered an empty split view).
+
 ## 0.4.0
 
 - **Breaking**: the SDK now runs in exactly one of two exclusive auth modes. Pass `customerToken` (a chat token minted by your backend, sent as `Authorization: Bearer <token>`, with the customer identity taken only from its claims) or `apiKey` as the full `keyId:secret` pair (sent whole on `x-api-key`, for trusted internal apps only). Passing both or neither throws `LiveAndAiChatError` with code `E_CONFIG`, as does a key ID without a secret. `LiveAndAiChatConfig(apiKey:customerToken:...)` replaces the old `apiKey`-only initializer, and the raw credentials are no longer public properties; read `config.authMode` instead.

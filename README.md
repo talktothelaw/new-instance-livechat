@@ -10,7 +10,7 @@ your iOS app. Hosted by [newinstance.cloud](https://newinstance.cloud).
 - Two-tier image cache (memory + disk): repeat renders never re-fetch
 - Resilient transport: HTTP/1.1-pinned Server-Sent Events with WebSocket fallback
 - Offline-tolerant: silent gap-fill resync when the network drops events
-- Light / dark themes, Dynamic Type, VoiceOver, Reduce Motion, iPad layout
+- Light / dark themes, Dynamic Type, VoiceOver, Reduce Motion, iPad chat panel
 
 ## Requirements
 
@@ -31,7 +31,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.4.0"),
+    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.4.1"),
 ],
 targets: [
     .target(
@@ -46,7 +46,7 @@ targets: [
 ### CocoaPods
 
 ```ruby
-pod 'LiveAndAiChat', '~> 0.4.0'
+pod 'LiveAndAiChat', '~> 0.4.1'
 ```
 
 ## Quick start
@@ -108,6 +108,11 @@ class ViewController: UIViewController {
 }
 ```
 
+On iPhone, `present(from:)` opens the chat full screen. On iPad it opens a 400 x 620 pt panel
+in the bottom-right corner (bottom-left in right-to-left languages) over a dimmed backdrop,
+like the web widget. Tapping the backdrop closes the chat with reason `gesture`. An iPad app
+running in a narrow Split View or Slide Over window gets the full-screen chat.
+
 ## Authentication
 
 The SDK runs in exactly **one** of two modes, chosen by what you pass to
@@ -119,7 +124,7 @@ The SDK runs in exactly **one** of two modes, chosen by what you pass to
 | API key | `apiKey: "keyId:secret"` | `x-api-key: keyId:secret` | `setUser(_:)` |
 
 Every request (GraphQL, every SSE request, the WebSocket upgrade) also carries
-`x-newinstance-sdk: ios/0.4.0`. Passing both `apiKey` and `customerToken`, or
+`x-newinstance-sdk: ios/0.4.1`. Passing both `apiKey` and `customerToken`, or
 neither, throws (see [Configuration errors](#configuration-errors)).
 `config.authMode` tells you which mode is active.
 
