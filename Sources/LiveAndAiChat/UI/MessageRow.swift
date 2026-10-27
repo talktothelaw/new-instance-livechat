@@ -11,6 +11,8 @@ struct MessageRow: View {
     let onRetry: (String) -> Void
     let onImageTap: (MessageAttachment) -> Void
     let onImageLoaded: () -> Void
+    let onAnswer: (String, ElicitationAction, [String: ElicitationValue]?) async throws -> Void
+    let onOpenStep: (URL) -> Bool
     @Environment(\.chatColors) private var colors
 
     var body: some View {
@@ -19,9 +21,38 @@ struct MessageRow: View {
         if message.type == .system {
             SystemMessageRow(content: message.content)
                 .environment(\.chatColors, colors)
+        } else if let step = message.elicitation {
+            stepBody(step)
         } else {
             chatMessageBody
         }
+    }
+
+    private func stepBody(_ step: Elicitation) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let label = senderLabel {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(colors.textSecondary)
+                    .padding(.leading, 4)
+            }
+            VStack(alignment: .trailing, spacing: 6) {
+                ElicitationCard(
+                    prompt: message.content,
+                    elicitation: step,
+                    onAnswer: { action, content in try await onAnswer(message.id, action, content) },
+                    onOpen: onOpenStep
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                BubbleFooter(message: message, isCustomer: false)
+            }
+            .frame(maxWidth: 280)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(RoundedCorners(tl: 16, tr: 16, bl: 4, br: 16).fill(colors.receivedBubble))
+            .environment(\.chatColors, colors)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var chatMessageBody: some View {

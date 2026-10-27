@@ -111,6 +111,12 @@ public final class LiveAndAiChat: ObservableObject {
     private let closeGuard = CloseEmissionGuard()
     private var unreadCancellable: AnyCancellable?
     weak var presentedChatController: AnyObject?
+    var inboundSignal: (_ withSound: Bool) -> Void = { withSound in
+        if withSound { NotificationTone.shared.play() }
+        #if canImport(UIKit)
+        Haptics.inbound()
+        #endif
+    }
 
     public func addDelegate(_ delegate: any LiveAndAiChatDelegate) {
         delegates.add(delegate as AnyObject)
@@ -584,6 +590,24 @@ public final class LiveAndAiChat: ObservableObject {
         }
     }
 
+    public func answerElicitation(messageId: String, action: ElicitationAction, content: [String: ElicitationValue]? = nil) async throws {
+        precondition(!destroyed, "SDK has been destroyed")
+        guard let convId = session.conversationId,
+              let step = store.messages.first(where: { $0.id == messageId })?.elicitation
+        else { throw LiveAndAiChatError(type: .validation, message: "There is no step to answer for this message.", recoverable: false) }
+        var vars: [String: Any] = ["conversationId": convId, "elicitationId": step.id, "action": action.rawValue]
+        if action == .accept, step.mode == .form, let content {
+            vars["content"] = ElicitationValue.object(content).foundationValue
+        }
+        do {
+            try await gql.execute(query: Operations.answerElicitation, variables: vars)
+        } catch {
+            if let e = error as? LiveAndAiChatError { emitError(e) }
+            Task { [weak self] in await self?.runGapFill(conversationId: convId) }
+            throw error
+        }
+    }
+
     public func sendTypingStart() {
         guard let convId = session.conversationId else { return }
         Task { [weak self] in
@@ -747,6 +771,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// (typical when the app un-backgrounds and replays a queue)
     /// triggers a single fetch ~250ms after the last event.
     private var gapFillDebounceTasks: [String: Task<Void, Never>] = [:]
+    private var transportConnectedBefore = false
 
     /// Compare the `totalMessages` field carried by a `csMessageReceived`
     /// event against the local store. If the server has more than we do,
@@ -826,11 +851,18 @@ public final class LiveAndAiChat: ObservableObject {
         subscriptionClient = client
         connectionSubscription = client.connectionStatePublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.connectionState = state
-                self?.emitConnection(state)
-            }
+            .sink { [weak self] state in self?.transportStateChanged(state) }
         client.start()
+    }
+
+    func transportStateChanged(_ state: ConnectionState) {
+        let reconnected = state == .connected && connectionState != .connected && transportConnectedBefore
+        if state == .connected { transportConnectedBefore = true }
+        connectionState = state
+        emitConnection(state)
+        if reconnected, let conversationId = session.conversationId {
+            Task { [weak self] in await self?.runGapFill(conversationId: conversationId) }
+        }
     }
 
     private func subscribeAll(conversationId: String) {
@@ -855,29 +887,7 @@ public final class LiveAndAiChat: ObservableObject {
                 return
             }
             SseLog.debug("→ sub csMessageReceived decoded id=\(msg.id.suffix(8)) type=\(msg.type.rawValue) total=\(msg.totalMessages.map(String.init) ?? "?") content=\"\(msg.content.prefix(60))\"")
-            self.store.mergeMessage(msg)
-            SseLog.debug("→ store.mergeMessage done, messages.count=\(self.store.messages.count)")
-            self.emitMessage(msg)
-            // Gap-fill: if the server says the conversation has more
-            // messages than we hold locally, the SSE stream likely
-            // skipped events while the app was backgrounded / network
-            // was flaky. Silently refetch — debounced & idempotent.
-            if let total = msg.totalMessages {
-                self.scheduleGapFillIfBehind(
-                    conversationId: msg.conversationId,
-                    remoteTotal: total
-                )
-            }
-            let inbound = msg.type == .agent || msg.type == .ai
-            let soundsOn = self.orgConfig?.widget.enableSounds ?? true
-            if inbound && soundsOn {
-                NotificationTone.shared.play()
-            }
-            #if canImport(UIKit)
-            if inbound {
-                Haptics.inbound()
-            }
-            #endif
+            self.receive(msg)
         }
         .store(in: &subscriptionCancellables)
 
@@ -953,6 +963,25 @@ public final class LiveAndAiChat: ObservableObject {
         client.subscribe(SubscriptionRequest(query: Operations.subHeartbeat))
             .sink { _ in /* no-op */ }
             .store(in: &subscriptionCancellables)
+    }
+
+    func receive(_ msg: ChatMessage) {
+        let isNew = store.mergeMessage(msg)
+        SseLog.debug("→ store.mergeMessage done, messages.count=\(store.messages.count)")
+        if isNew { emitMessage(msg) }
+        // Gap-fill: if the server says the conversation has more
+        // messages than we hold locally, the SSE stream likely
+        // skipped events while the app was backgrounded / network
+        // was flaky. Silently refetch — debounced & idempotent.
+        if let total = msg.totalMessages {
+            scheduleGapFillIfBehind(
+                conversationId: msg.conversationId,
+                remoteTotal: total
+            )
+        }
+        if isNew && (msg.type == .agent || msg.type == .ai) {
+            inboundSignal(orgConfig?.widget.enableSounds ?? true)
+        }
     }
 
     /// The agent closed the conversation while the customer was still
@@ -1056,10 +1085,7 @@ public final class LiveAndAiChat: ObservableObject {
             }
             if let aiNode = payload["aiResponse"] as? [String: Any],
                let ai = try? GqlClient.decode(ChatMessage.self, from: aiNode) {
-                await MainActor.run {
-                    self.store.mergeMessage(ai)
-                    self.emitMessage(ai)
-                }
+                await MainActor.run { self.receive(ai) }
             }
         } catch let e as LiveAndAiChatError {
             if e.conversationClosed {
@@ -1124,7 +1150,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// the same `sdk.openChat()` pattern as on Android.
     @MainActor public static func current() -> LiveAndAiChat? { currentInstance }
 
-    nonisolated public static let version = "0.4.1"
+    nonisolated public static let version = "0.5.0"
 }
 
 /// Callback-style delegate alternative to Combine subscriptions. Optional

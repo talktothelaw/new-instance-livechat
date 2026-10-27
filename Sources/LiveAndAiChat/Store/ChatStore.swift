@@ -52,7 +52,8 @@ final class ChatStore: ObservableObject {
     /// - Else if a message with the same `clientId` (and clientId not blank) exists → replace.
     /// - Else append.
     /// After insert/replace, re-sort by (`seq` ?? `Int64.max`).
-    func mergeMessage(_ message: ChatMessage) {
+    @discardableResult
+    func mergeMessage(_ message: ChatMessage) -> Bool {
         let before = messages.count
         var list = messages
         var action: String
@@ -72,11 +73,13 @@ final class ChatStore: ObservableObject {
 
         if let seq = message.seq { highestSeq = max(highestSeq, seq) }
 
+        let isNew = action == "append"
         let isInbound = message.type == .agent || message.type == .ai
-        if isInbound && !widgetOpen {
+        if isNew && isInbound && !widgetOpen {
             unreadCount += 1
         }
         SseLog.debug("store.mergeMessage \(action) id=\(message.id.suffix(8)) type=\(message.type.rawValue) seq=\(message.seq ?? -1) count: \(before)→\(messages.count)")
+        return isNew
     }
 
     func setInitialMessages(_ messages: [ChatMessage]) {

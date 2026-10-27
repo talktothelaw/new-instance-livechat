@@ -31,7 +31,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.4.1"),
+    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.5.0"),
 ],
 targets: [
     .target(
@@ -46,7 +46,7 @@ targets: [
 ### CocoaPods
 
 ```ruby
-pod 'LiveAndAiChat', '~> 0.4.1'
+pod 'LiveAndAiChat', '~> 0.5.0'
 ```
 
 ## Quick start
@@ -124,7 +124,7 @@ The SDK runs in exactly **one** of two modes, chosen by what you pass to
 | API key | `apiKey: "keyId:secret"` | `x-api-key: keyId:secret` | `setUser(_:)` |
 
 Every request (GraphQL, every SSE request, the WebSocket upgrade) also carries
-`x-newinstance-sdk: ios/0.4.1`. Passing both `apiKey` and `customerToken`, or
+`x-newinstance-sdk: ios/0.5.0`. Passing both `apiKey` and `customerToken`, or
 neither, throws (see [Configuration errors](#configuration-errors)).
 `config.authMode` tells you which mode is active.
 

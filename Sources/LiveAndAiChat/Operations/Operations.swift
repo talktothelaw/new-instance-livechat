@@ -66,6 +66,7 @@ enum Operations {
           id conversationId seq clientId content type status
           sender { senderId senderName senderEmail }
           attachments { url name type size }
+          elicitation { id mode message requestedSchema url status }
           sentAt deliveredAt readAt
         }
       }
@@ -89,12 +90,14 @@ enum Operations {
           id conversationId seq clientId content type status
           sender { senderId senderName senderEmail }
           attachments { url name type size }
+          elicitation { id mode message requestedSchema url status }
           sentAt
         }
         aiResponse {
           id conversationId seq clientId content type status
           sender { senderId senderName senderEmail }
           attachments { url name type size }
+          elicitation { id mode message requestedSchema url status }
           sentAt
         }
         handoffRequested
@@ -121,9 +124,14 @@ enum Operations {
         id conversationId seq clientId content type status
         sender { senderId senderName senderEmail }
         attachments { url name type size }
+        elicitation { id mode message requestedSchema url status }
         sentAt deliveredAt readAt
       }
     }
+    """
+
+    static let answerElicitation = """
+    mutation AnswerCsElicitation($conversationId: ID!, $elicitationId: ID!, $action: CsElicitationAction!, $content: JSONObject) { answerCsElicitation(conversationId: $conversationId, elicitationId: $elicitationId, action: $action, content: $content) }
     """
 
     static let sendTypingStart = """
@@ -144,6 +152,7 @@ enum Operations {
         id conversationId seq clientId content type status
         sender { senderId senderName senderEmail }
         attachments { url name type size }
+        elicitation { id mode message requestedSchema url status }
         sentAt deliveredAt readAt
         totalMessages
       }

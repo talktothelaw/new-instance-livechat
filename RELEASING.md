@@ -19,6 +19,10 @@ pod trunk me
 
 ## Per-release checklist
 
+Release order: 0.5.0 and later select `CsMessage.elicitation` (chat steps), and
+a NewInstance server without chat steps support rejects every chat request
+from them. Release them only after the server supports chat steps.
+
 1. **Bump the version** in two places (must match):
 
    ```ruby
