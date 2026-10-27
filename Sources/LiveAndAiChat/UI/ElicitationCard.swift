@@ -57,8 +57,13 @@ enum ElicitationForm {
     static func answer(
         _ fields: [ElicitationField],
         texts: [String: String],
-        toggles: [String: Bool]
+        toggles: [String: Bool],
+        locale: Locale = .current
     ) -> (content: [String: JSONValue], problems: [String: String]) {
+        let decimal = NumberFormatter()
+        decimal.locale = locale
+        decimal.numberStyle = .decimal
+        decimal.usesGroupingSeparator = false
         var content: [String: JSONValue] = [:]
         var problems: [String: String] = [:]
         for field in fields {
@@ -70,7 +75,8 @@ enum ElicitationForm {
             if text.isEmpty {
                 if field.required { problems[field.key] = requiredError }
             } else if case .number(let integer) = field.kind {
-                if let number = Double(text), number.isFinite, !integer || number.rounded() == number {
+                if let number = decimal.number(from: text)?.doubleValue ?? Double(text),
+                   number.isFinite, !integer || number.rounded() == number {
                     content[field.key] = .number(number)
                 } else {
                     problems[field.key] = integer ? integerError : numberError

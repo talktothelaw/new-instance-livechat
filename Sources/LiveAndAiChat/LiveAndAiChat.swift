@@ -111,6 +111,12 @@ public final class LiveAndAiChat: ObservableObject {
     private let closeGuard = CloseEmissionGuard()
     private var unreadCancellable: AnyCancellable?
     weak var presentedChatController: AnyObject?
+    var inboundSignal: (_ withSound: Bool) -> Void = { withSound in
+        if withSound { NotificationTone.shared.play() }
+        #if canImport(UIKit)
+        Haptics.inbound()
+        #endif
+    }
 
     public func addDelegate(_ delegate: any LiveAndAiChatDelegate) {
         delegates.add(delegate as AnyObject)
@@ -964,16 +970,9 @@ public final class LiveAndAiChat: ObservableObject {
                 remoteTotal: total
             )
         }
-        let inbound = isNew && (msg.type == .agent || msg.type == .ai)
-        let soundsOn = orgConfig?.widget.enableSounds ?? true
-        if inbound && soundsOn {
-            NotificationTone.shared.play()
+        if isNew && (msg.type == .agent || msg.type == .ai) {
+            inboundSignal(orgConfig?.widget.enableSounds ?? true)
         }
-        #if canImport(UIKit)
-        if inbound {
-            Haptics.inbound()
-        }
-        #endif
     }
 
     /// The agent closed the conversation while the customer was still
@@ -1077,9 +1076,7 @@ public final class LiveAndAiChat: ObservableObject {
             }
             if let aiNode = payload["aiResponse"] as? [String: Any],
                let ai = try? GqlClient.decode(ChatMessage.self, from: aiNode) {
-                await MainActor.run {
-                    if self.store.mergeMessage(ai) { self.emitMessage(ai) }
-                }
+                await MainActor.run { self.receive(ai) }
             }
         } catch let e as LiveAndAiChatError {
             if e.conversationClosed {

@@ -14,6 +14,38 @@ private func stepMessage(_ status: ElicitationStatus, mode: ElicitationMode = .f
     )
 }
 
+private func requestJSON(_ request: URLRequest) -> [String: Any]? {
+    guard let body = request.httpBody ?? request.httpBodyStream.map(readAll) else { return nil }
+    return try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+}
+
+private func readAll(_ stream: InputStream) -> Data {
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let read = stream.read(&buffer, maxLength: buffer.count)
+        if read <= 0 { break }
+        data.append(buffer, count: read)
+    }
+    return data
+}
+
+private func aiReply(_ text: String, content: String) -> ChatMessage {
+    ChatMessage(id: "ai-\(text)", conversationId: "conv-1", content: content, type: .ai)
+}
+
+@MainActor
+private func waitUntil(_ condition: () -> Bool) async throws {
+    var tries = 0
+    while !condition() && tries < 300 {
+        tries += 1
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTAssertTrue(condition())
+}
+
 private final class MessageCounter: LiveAndAiChatDelegate {
     var received: [ChatMessage] = []
     func didReceiveMessage(_ message: ChatMessage) { received.append(message) }
@@ -134,6 +166,67 @@ final class ElicitationTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testAiReplySignalsOnceWhicheverCopyArrivesFirst() async throws {
+        StubURLProtocol.reset { request in
+            guard let json = requestJSON(request),
+                  (json["query"] as? String)?.contains("SendCsCustomerMessage") == true,
+                  let vars = json["variables"] as? [String: Any],
+                  let text = vars["content"] as? String
+            else { return (200, Data(#"{"data":{"ok":true}}"#.utf8)) }
+            let payload: [String: Any] = ["data": ["sendCsCustomerMessage": [
+                "success": true,
+                "customerMessage": [
+                    "id": "cust-\(text)", "clientId": vars["clientId"] ?? "", "conversationId": "conv-1",
+                    "content": text, "type": "CUSTOMER",
+                ],
+                "aiResponse": ["id": "ai-\(text)", "conversationId": "conv-1", "content": "http", "type": "AI"],
+            ]]]
+            return (200, try! JSONSerialization.data(withJSONObject: payload))
+        }
+        let sdk = try LiveAndAiChat.Builder().config(LiveAndAiChatConfig(apiKey: "sk_live_k:secret")).build()
+        defer {
+            sdk.session.clear()
+            sdk.destroy()
+        }
+        sdk.session.conversationId = "conv-1"
+        var signals = 0
+        sdk.inboundSignal = { _ in signals += 1 }
+        let counter = MessageCounter()
+        sdk.addDelegate(counter)
+
+        sdk.sendMessage("one")
+        try await waitUntil { sdk.messages.contains { $0.id == "ai-one" } }
+        XCTAssertEqual(signals, 1)
+        sdk.receive(aiReply("one", content: "subscription"))
+        XCTAssertEqual(signals, 1)
+
+        sdk.receive(aiReply("two", content: "subscription"))
+        XCTAssertEqual(signals, 2)
+        sdk.sendMessage("two")
+        try await waitUntil { sdk.messages.first { $0.id == "ai-two" }?.content == "http" }
+        XCTAssertEqual(signals, 2)
+        XCTAssertEqual(counter.received.map(\.id), ["ai-one", "ai-two"])
+    }
+
+    func testNumberFieldsAcceptLocaleDecimalSeparator() {
+        let fields = ElicitationForm.fields(from: .object(["properties": .object([
+            "ratio": .object(["type": .string("number")]),
+            "count": .object(["type": .string("integer")]),
+        ])]))
+        let german = Locale(identifier: "de_DE")
+        XCTAssertEqual(
+            ElicitationForm.answer(fields, texts: ["ratio": "1,5", "count": "2,0"], toggles: [:], locale: german).content,
+            ["ratio": .number(1.5), "count": .number(2)]
+        )
+        XCTAssertEqual(ElicitationForm.answer(fields, texts: ["ratio": "1.5"], toggles: [:], locale: german).content, ["ratio": .number(1.5)])
+        XCTAssertEqual(ElicitationForm.answer(fields, texts: ["count": "2,5"], toggles: [:], locale: german).problems, ["count": "Enter a whole number."])
+        XCTAssertEqual(
+            ElicitationForm.answer(fields, texts: ["ratio": "1,5"], toggles: [:], locale: Locale(identifier: "en_US")).problems,
+            ["ratio": "Enter a number."]
+        )
+    }
+
     func testBuildsFieldsFromSchemaAndSkipsUnsupportedTypes() {
         let schema: JSONValue = .object([
             "properties": .object([
@@ -222,23 +315,9 @@ final class ElicitationTests: XCTestCase {
     }
 
     private func answerVariables(_ request: URLRequest) -> [String: Any]? {
-        guard let body = request.httpBody ?? request.httpBodyStream.map(readAll),
-              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+        guard let json = requestJSON(request),
               (json["query"] as? String)?.contains("AnswerCsElicitation") == true
         else { return nil }
         return json["variables"] as? [String: Any]
-    }
-
-    private func readAll(_ stream: InputStream) -> Data {
-        stream.open()
-        defer { stream.close() }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while stream.hasBytesAvailable {
-            let read = stream.read(&buffer, maxLength: buffer.count)
-            if read <= 0 { break }
-            data.append(buffer, count: read)
-        }
-        return data
     }
 }

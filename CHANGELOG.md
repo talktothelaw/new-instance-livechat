@@ -4,7 +4,8 @@
 
 - Chat steps from connected MCP servers: forms and secure pages. An AI message can carry a step (`ChatMessage.elicitation`). The chat shows it as a card: a form built from the step's fields (text, choice, number and toggle; other field types are skipped) with `Send` and `Not now`, or a secure page with `Open secure page` and `Not now`. Secure pages open only `https` links, in an in-app Safari view, and the card names the host the customer finishes on. When the server re-sends the message with a new status, the card shows `Sent`, `Declined`, `Cancelled`, `This step expired` or `Done`. Answers go only to the `answerCsElicitation` mutation and are never logged or stored.
 - New `answerElicitation(messageId:action:content:)` for apps that build their own chat UI.
-- A message the server re-sends with the same id now updates in place without playing the sound, vibrating, raising the unread count or calling `didReceiveMessage` again.
+- A message the server re-sends with the same id now updates in place without playing the sound, vibrating, raising the unread count or calling `didReceiveMessage` again. An AI reply plays the sound and vibrates once, whether the `sendCsCustomerMessage` response or the realtime subscription delivers it first. The customer's own messages no longer call `didReceiveMessage` when the server echoes them back; they still call `didSendMessage`.
+- Number fields in a step accept the customer's local decimal separator (for example `1,5`).
 - Every request sends `x-newinstance-sdk: ios/0.5.0`, which lets the server send steps. The podspec now links `SafariServices`.
 
 ## 0.4.1
