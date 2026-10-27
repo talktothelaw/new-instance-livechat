@@ -40,6 +40,44 @@ public struct MessageAttachment: Codable, Equatable, Sendable {
     }
 }
 
+public enum ElicitationMode: String, Codable, Sendable {
+    case form = "FORM"
+    case url = "URL"
+}
+
+public enum ElicitationStatus: String, Codable, Sendable {
+    case pending = "PENDING"
+    case answered = "ANSWERED"
+    case declined = "DECLINED"
+    case cancelled = "CANCELLED"
+    case expired = "EXPIRED"
+    case completed = "COMPLETED"
+}
+
+public enum ElicitationAction: String, Sendable {
+    case accept = "ACCEPT"
+    case decline = "DECLINE"
+    case cancel = "CANCEL"
+}
+
+public struct Elicitation: Codable, Equatable, Sendable {
+    public let id: String
+    public let mode: ElicitationMode
+    public let message: String?
+    public let requestedSchema: JSONValue?
+    public let url: String?
+    public let status: ElicitationStatus
+
+    public init(id: String, mode: ElicitationMode, message: String? = nil, requestedSchema: JSONValue? = nil, url: String? = nil, status: ElicitationStatus) {
+        self.id = id
+        self.mode = mode
+        self.message = message
+        self.requestedSchema = requestedSchema
+        self.url = url
+        self.status = status
+    }
+}
+
 public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public let clientId: String?
@@ -64,6 +102,7 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
     /// intermediate events were missed (reconnect, slow network,
     /// app backgrounded).
     public let totalMessages: Int?
+    public let elicitation: Elicitation?
 
     public init(
         id: String,
@@ -77,7 +116,8 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
         attachments: [MessageAttachment] = [],
         createdAt: String? = nil,
         readAt: String? = nil,
-        totalMessages: Int? = nil
+        totalMessages: Int? = nil,
+        elicitation: Elicitation? = nil
     ) {
         self.id = id
         self.clientId = clientId
@@ -91,6 +131,7 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.readAt = readAt
         self.totalMessages = totalMessages
+        self.elicitation = elicitation
     }
 
     /// `init(from:)` is lenient: missing fields fall back to sensible
@@ -117,6 +158,7 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
         }
         readAt = try c.decodeIfPresent(String.self, forKey: .readAt)
         totalMessages = try c.decodeIfPresent(Int.self, forKey: .totalMessages)
+        elicitation = (try? c.decodeIfPresent(Elicitation.self, forKey: .elicitation)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -133,11 +175,12 @@ public struct ChatMessage: Codable, Equatable, Sendable, Identifiable {
         try c.encodeIfPresent(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(readAt, forKey: .readAt)
         try c.encodeIfPresent(totalMessages, forKey: .totalMessages)
+        try c.encodeIfPresent(elicitation, forKey: .elicitation)
     }
 
     enum CodingKeys: String, CodingKey {
         case id, clientId, conversationId, content, type, status, seq, sender
-        case attachments, createdAt, readAt, totalMessages
+        case attachments, createdAt, readAt, totalMessages, elicitation
         // The server's `sendCsCustomerMessage` mutation echoes the
         // message with `sentAt` instead of `createdAt`. We accept both.
         case sentAt

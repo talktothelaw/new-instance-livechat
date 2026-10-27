@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Chat steps from connected MCP servers: forms and secure pages. An AI message can carry a step (`ChatMessage.elicitation`). The chat shows it as a card: a form built from the step's fields (text, choice, number and toggle; other field types are skipped) with `Send` and `Not now`, or a secure page with `Open secure page` and `Not now`. Secure pages open only `https` links, in an in-app Safari view, and the card names the host the customer finishes on. When the server re-sends the message with a new status, the card shows `Sent`, `Declined`, `Cancelled`, `This step expired` or `Done`. Answers go only to the `answerCsElicitation` mutation and are never logged or stored.
+- New `answerElicitation(messageId:action:content:)` for apps that build their own chat UI.
+- A message the server re-sends with the same id now updates in place without playing the sound, vibrating, raising the unread count or calling `didReceiveMessage` again.
+- Every request sends `x-newinstance-sdk: ios/0.5.0`, which lets the server send steps. The podspec now links `SafariServices`.
+
 ## 0.4.1
 
 - On iPad, `present(from:)` now opens the chat as a 400 x 620 pt panel in the bottom-right corner (bottom-left in right-to-left languages) over a dimmed backdrop, matching the web widget, instead of a full-screen column. The panel moves up when the keyboard opens. Tapping the backdrop closes the chat and reports `ChatCloseEvent` reason `gesture`. iPhone, and iPad apps in a narrow Split View or Slide Over window, keep the full-screen chat. React Native and Flutter pick this up through `present(from:)`.

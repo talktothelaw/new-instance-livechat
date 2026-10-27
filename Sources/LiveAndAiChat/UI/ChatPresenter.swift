@@ -15,6 +15,7 @@ enum ChatCardLayout {
 #if canImport(UIKit)
 import UIKit
 import UniformTypeIdentifiers
+import SafariServices
 
 /// UIKit-host glue that lets pure-UIKit apps call ``LiveAndAiChat/present(from:)``
 /// without writing any SwiftUI. SwiftUI hosts should embed ``ChatScreen``
@@ -46,6 +47,16 @@ public extension LiveAndAiChat {
             self?.openChat()
         }
         presenter.presentationController?.delegate = presenter
+    }
+}
+
+extension LiveAndAiChat {
+    func openSecurePage(_ url: URL) {
+        guard let url = ElicitationForm.secureUrl(url.absoluteString) else { return }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        var top = (windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        top?.present(SFSafariViewController(url: url), animated: true)
     }
 }
 

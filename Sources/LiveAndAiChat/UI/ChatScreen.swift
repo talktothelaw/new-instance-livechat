@@ -181,7 +181,11 @@ public struct ChatScreen: View {
                     messages: store.messages,
                     agentTyping: typingAllowed && store.agentTyping,
                     onRetry: { sdk.retryMessage(messageId: $0) },
-                    onImageTap: { att in viewerAttachment = att }
+                    onImageTap: { att in viewerAttachment = att },
+                    onAnswer: { id, action, content in
+                        try await sdk.answerElicitation(messageId: id, action: action, content: content)
+                    },
+                    onOpenStep: { sdk.openSecurePage($0) }
                 )
                 .environment(\.chatColors, colors)
             }

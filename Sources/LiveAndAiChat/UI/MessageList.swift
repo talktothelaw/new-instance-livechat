@@ -21,6 +21,8 @@ struct MessageList: View {
     let agentTyping: Bool
     let onRetry: (String) -> Void
     let onImageTap: (MessageAttachment) -> Void
+    let onAnswer: (String, ElicitationAction, [String: JSONValue]?) async throws -> Void
+    let onOpenStep: (URL) -> Void
     @Environment(\.chatColors) private var colors
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -152,7 +154,9 @@ struct MessageList: View {
                 message: msg,
                 onRetry: onRetry,
                 onImageTap: onImageTap,
-                onImageLoaded: { imageLoadTick += 1 }
+                onImageLoaded: { imageLoadTick += 1 },
+                onAnswer: onAnswer,
+                onOpenStep: onOpenStep
             )
             .rotationEffect(.degrees(180))
             // Flip horizontally so text and bubbles aren't mirrored after

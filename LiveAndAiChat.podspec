@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name          = "LiveAndAiChat"
-  s.version       = "0.4.1"
+  s.version       = "0.5.0"
   s.summary       = "Native iOS chat SDK: AI + live agent, drop-in SwiftUI screen."
   s.description   = <<~DESC
     LiveAndAiChat is a complete iOS chat SDK for newinstance.cloud. It ships a
@@ -27,5 +27,5 @@ Pod::Spec.new do |s|
   s.source_files  = "Sources/LiveAndAiChat/**/*.swift"
   s.frameworks    = "Foundation", "Combine", "Network", "Security",
                     "SwiftUI", "UIKit", "PhotosUI", "AVFoundation",
-                    "CryptoKit"
+                    "CryptoKit", "SafariServices"
 end
