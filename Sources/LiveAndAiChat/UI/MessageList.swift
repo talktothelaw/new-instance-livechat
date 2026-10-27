@@ -21,7 +21,7 @@ struct MessageList: View {
     let agentTyping: Bool
     let onRetry: (String) -> Void
     let onImageTap: (MessageAttachment) -> Void
-    let onAnswer: (String, ElicitationAction, [String: JSONValue]?) async throws -> Void
+    let onAnswer: (String, ElicitationAction, [String: ElicitationValue]?) async throws -> Void
     let onOpenStep: (URL) -> Bool
     @Environment(\.chatColors) private var colors
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

@@ -1,9 +1,14 @@
 import Foundation
 
+struct ElicitationChoice: Equatable {
+    let value: String
+    let label: String
+}
+
 struct ElicitationField: Equatable {
     enum Kind: Equatable {
         case text
-        case choice([String])
+        case choice([ElicitationChoice])
         case number(integer: Bool)
         case toggle
     }
@@ -23,14 +28,13 @@ enum ElicitationForm {
     static let numberError = "Enter a number."
     static let answerError = "Could not send your answer. Try again."
 
-    static func fields(from schema: JSONValue?) -> [ElicitationField] {
+    static func fields(from schema: ElicitationValue?) -> [ElicitationField] {
         guard case .object(let root)? = schema, case .object(let properties)? = root["properties"] else { return [] }
         var required: Set<String> = []
         if case .array(let names)? = root["required"] { required = Set(names.compactMap(\.text)) }
         return properties.keys.sorted().compactMap { key -> ElicitationField? in
             guard case .object(let def)? = properties[key], case .string(let type)? = def["type"] else { return nil }
-            var options: [String] = []
-            if case .array(let values)? = def["enum"] { options = values.compactMap(\.text) }
+            let options = choices(def)
             let kind: ElicitationField.Kind
             switch type {
             case "string": kind = options.isEmpty ? .text : .choice(options)
@@ -54,17 +58,42 @@ enum ElicitationForm {
         }
     }
 
+    static func canSend(_ schema: ElicitationValue?) -> Bool {
+        guard case .object(let root)? = schema, case .array(let names)? = root["required"] else { return true }
+        let shown = Set(fields(from: schema).map(\.key))
+        return names.allSatisfy { $0.text.map(shown.contains) ?? false }
+    }
+
+    private static func choices(_ def: [String: ElicitationValue]) -> [ElicitationChoice] {
+        if case .array(let options)? = def["oneOf"] {
+            return options.compactMap { option in
+                guard case .object(let entry) = option, let value = entry["const"]?.text else { return nil }
+                return ElicitationChoice(value: value, label: nonEmpty(entry["title"]?.text) ?? value)
+            }
+        }
+        guard case .array(let values)? = def["enum"] else { return [] }
+        var names: [ElicitationValue?] = Array(repeating: nil, count: values.count)
+        if case .array(let given)? = def["enumNames"], given.count == values.count { names = given }
+        return zip(values, names).compactMap { raw, name in
+            raw.text.map { ElicitationChoice(value: $0, label: nonEmpty(name?.text) ?? $0) }
+        }
+    }
+
+    private static func nonEmpty(_ text: String?) -> String? {
+        text?.isEmpty == false ? text : nil
+    }
+
     static func answer(
         _ fields: [ElicitationField],
         texts: [String: String],
         toggles: [String: Bool],
         locale: Locale = .current
-    ) -> (content: [String: JSONValue], problems: [String: String]) {
+    ) -> (content: [String: ElicitationValue], problems: [String: String]) {
         let decimal = NumberFormatter()
         decimal.locale = locale
         decimal.numberStyle = .decimal
         decimal.usesGroupingSeparator = false
-        var content: [String: JSONValue] = [:]
+        var content: [String: ElicitationValue] = [:]
         var problems: [String: String] = [:]
         for field in fields {
             if field.kind == .toggle {
@@ -106,8 +135,12 @@ enum ElicitationForm {
         return url
     }
 
+    static func reopenUrl(_ step: Elicitation) -> URL? {
+        step.mode == .url && step.status == .answered ? secureUrl(step.url) : nil
+    }
+
     static func hostLabel(_ url: URL) -> String {
-        (url.host ?? "") + (url.port.map { ":\($0)" } ?? "")
+        (url.host ?? "") + (url.port.flatMap { $0 == 443 ? nil : ":\($0)" } ?? "")
     }
 }
 
@@ -117,15 +150,21 @@ import SwiftUI
 struct ElicitationCard: View {
     let prompt: String
     let elicitation: Elicitation
-    let onAnswer: (ElicitationAction, [String: JSONValue]?) async throws -> Void
+    let onAnswer: (ElicitationAction, [String: ElicitationValue]?) async throws -> Void
     let onOpen: (URL) -> Bool
     @Environment(\.chatColors) private var colors
 
     var body: some View {
         if let line = ElicitationForm.statusLine(elicitation.status) {
-            Text(verbatim: line)
-                .font(.caption.weight(.medium))
-                .foregroundColor(colors.receivedTimestamp)
+            VStack(alignment: .leading, spacing: 12) {
+                StepPrompt(text: prompt)
+                Text(verbatim: line)
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(colors.receivedTimestamp)
+                if let url = ElicitationForm.reopenUrl(elicitation) {
+                    StepButton(title: "Open secure page", icon: "arrow.up.right.square", primary: true) { _ = onOpen(url) }
+                }
+            }
         } else {
             PendingStep(prompt: prompt, elicitation: elicitation, onAnswer: onAnswer, onOpen: onOpen)
                 .id(elicitation.id)
@@ -136,7 +175,7 @@ struct ElicitationCard: View {
 private struct PendingStep: View {
     let prompt: String
     let elicitation: Elicitation
-    let onAnswer: (ElicitationAction, [String: JSONValue]?) async throws -> Void
+    let onAnswer: (ElicitationAction, [String: ElicitationValue]?) async throws -> Void
     let onOpen: (URL) -> Bool
     @Environment(\.chatColors) private var colors
     @State private var texts: [String: String] = [:]
@@ -147,16 +186,12 @@ private struct PendingStep: View {
 
     var body: some View {
         let isForm = elicitation.mode == .form
-        let fields = isForm ? ElicitationForm.fields(from: elicitation.requestedSchema) : []
+        let sendable = isForm && ElicitationForm.canSend(elicitation.requestedSchema)
+        let fields = sendable ? ElicitationForm.fields(from: elicitation.requestedSchema) : []
         let url = isForm ? nil : ElicitationForm.secureUrl(elicitation.url)
 
         VStack(alignment: .leading, spacing: 12) {
-            if !prompt.isEmpty {
-                Text(verbatim: prompt)
-                    .font(.body)
-                    .foregroundColor(colors.receivedText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            StepPrompt(text: prompt)
             if let url {
                 Text(verbatim: "You will finish this step on \(ElicitationForm.hostLabel(url)).")
                     .font(.caption)
@@ -172,12 +207,12 @@ private struct PendingStep: View {
                     .foregroundColor(colors.errorColor)
             }
             HStack(spacing: 8) {
-                if isForm {
-                    actionButton("Send", primary: true) { send(fields) }
+                if sendable {
+                    StepButton(title: "Send", primary: true, busy: busy) { send(fields) }
                 } else if let url {
-                    actionButton("Open secure page", icon: "arrow.up.right.square", primary: true) { open(url) }
+                    StepButton(title: "Open secure page", icon: "arrow.up.right.square", primary: true, busy: busy) { open(url) }
                 }
-                actionButton("Not now", primary: false) { submit(.decline, nil) }
+                StepButton(title: "Not now", primary: false, busy: busy) { submit(.decline, nil) }
             }
         }
     }
@@ -200,12 +235,12 @@ private struct PendingStep: View {
                 label(field)
                 Menu {
                     Button("Choose one") { texts[field.key] = "" }
-                    ForEach(options, id: \.self) { option in
-                        Button(option) { texts[field.key] = option }
+                    ForEach(options, id: \.value) { option in
+                        Button(option.label) { texts[field.key] = option.value }
                     }
                 } label: {
                     HStack {
-                        Text(verbatim: text(field).isEmpty ? "Choose one" : text(field))
+                        Text(verbatim: choiceLabel(text(field), in: options))
                             .foregroundColor(colors.inputText)
                         Spacer(minLength: 4)
                         Image(systemName: "chevron.up.chevron.down")
@@ -253,7 +288,67 @@ private struct PendingStep: View {
         texts[field.key] ?? field.initialText
     }
 
-    private func actionButton(_ title: String, icon: String? = nil, primary: Bool, action: @escaping () -> Void) -> some View {
+    private func choiceLabel(_ value: String, in options: [ElicitationChoice]) -> String {
+        if value.isEmpty { return "Choose one" }
+        return options.first { $0.value == value }?.label ?? value
+    }
+
+    private func send(_ fields: [ElicitationField]) {
+        guard !busy else { return }
+        let result = ElicitationForm.answer(fields, texts: texts, toggles: toggles)
+        problems = result.problems
+        guard result.problems.isEmpty else { return }
+        submit(.accept, result.content)
+    }
+
+    private func open(_ url: URL) {
+        guard !busy else { return }
+        failed = false
+        guard onOpen(url) else {
+            failed = true
+            return
+        }
+        submit(.accept, nil)
+    }
+
+    private func submit(_ action: ElicitationAction, _ content: [String: ElicitationValue]?) {
+        guard !busy else { return }
+        busy = true
+        failed = false
+        Task {
+            do {
+                try await onAnswer(action, content)
+            } catch {
+                busy = false
+                failed = true
+            }
+        }
+    }
+}
+
+private struct StepPrompt: View {
+    let text: String
+    @Environment(\.chatColors) private var colors
+
+    var body: some View {
+        if !text.isEmpty {
+            Text(verbatim: text)
+                .font(.body)
+                .foregroundColor(colors.receivedText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct StepButton: View {
+    let title: String
+    var icon: String?
+    let primary: Bool
+    var busy = false
+    let action: () -> Void
+    @Environment(\.chatColors) private var colors
+
+    var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let icon { Image(systemName: icon) }
@@ -275,38 +370,6 @@ private struct PendingStep: View {
         .buttonStyle(.plain)
         .disabled(busy)
         .opacity(busy ? 0.6 : 1)
-    }
-
-    private func send(_ fields: [ElicitationField]) {
-        guard !busy else { return }
-        let result = ElicitationForm.answer(fields, texts: texts, toggles: toggles)
-        problems = result.problems
-        guard result.problems.isEmpty else { return }
-        submit(.accept, result.content)
-    }
-
-    private func open(_ url: URL) {
-        guard !busy else { return }
-        failed = false
-        guard onOpen(url) else {
-            failed = true
-            return
-        }
-        submit(.accept, nil)
-    }
-
-    private func submit(_ action: ElicitationAction, _ content: [String: JSONValue]?) {
-        guard !busy else { return }
-        busy = true
-        failed = false
-        Task {
-            do {
-                try await onAnswer(action, content)
-            } catch {
-                busy = false
-                failed = true
-            }
-        }
     }
 }
 

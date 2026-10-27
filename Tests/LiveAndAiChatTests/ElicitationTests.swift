@@ -228,7 +228,7 @@ final class ElicitationTests: XCTestCase {
     }
 
     func testBuildsFieldsFromSchemaAndSkipsUnsupportedTypes() {
-        let schema: JSONValue = .object([
+        let schema: ElicitationValue = .object([
             "properties": .object([
                 "name": .object(["type": .string("string"), "title": .string("Your name"), "description": .string("As on your card")]),
                 "plan": .object(["type": .string("string"), "enum": .array([.string("basic"), .string("pro")])]),
@@ -244,7 +244,10 @@ final class ElicitationTests: XCTestCase {
         XCTAssertEqual(fields.map(\.key), ["agree", "amount", "name", "plan", "ratio"])
         let byKey = Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0) })
         XCTAssertEqual(byKey["name"], ElicitationField(key: "name", label: "Your name", helper: "As on your card", kind: .text, required: true, initialText: "", initialOn: false))
-        XCTAssertEqual(byKey["plan"]?.kind, .choice(["basic", "pro"]))
+        XCTAssertEqual(byKey["plan"]?.kind, .choice([
+            ElicitationChoice(value: "basic", label: "basic"),
+            ElicitationChoice(value: "pro", label: "pro"),
+        ]))
         XCTAssertEqual(byKey["plan"]?.label, "plan")
         XCTAssertEqual(byKey["plan"]?.initialText, "")
         XCTAssertEqual(byKey["amount"]?.kind, .number(integer: true))
@@ -330,6 +333,139 @@ final class ElicitationTests: XCTestCase {
         XCTAssertEqual(url?.absoluteString, "https://pay.example.com/step?id=1")
         XCTAssertEqual(url.map(ElicitationForm.hostLabel), "pay.example.com")
         XCTAssertEqual(ElicitationForm.secureUrl("HTTPS://pay.example.com:8443/x").map(ElicitationForm.hostLabel), "pay.example.com:8443")
+        XCTAssertEqual(ElicitationForm.secureUrl("https://pay.example.com:443/x").map(ElicitationForm.hostLabel), "pay.example.com")
+    }
+
+    func testChoicesFromOneOfAndEnumNames() {
+        let fields = ElicitationForm.fields(from: .object(["properties": .object([
+            "plan": .object(["type": .string("string"), "oneOf": .array([
+                .object(["const": .string("basic"), "title": .string("Basic plan")]),
+                .object(["const": .string("pro")]),
+                .object(["title": .string("No value")]),
+            ])]),
+            "size": .object([
+                "type": .string("string"),
+                "enum": .array([.string("s"), .string("m")]),
+                "enumNames": .array([.string("Small"), .string("Medium")]),
+            ]),
+            "tier": .object([
+                "type": .string("string"),
+                "enum": .array([.string("a"), .string("b")]),
+                "enumNames": .array([.string("Only one")]),
+            ]),
+        ])]))
+        let byKey = Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0) })
+        XCTAssertEqual(byKey["plan"]?.kind, .choice([
+            ElicitationChoice(value: "basic", label: "Basic plan"),
+            ElicitationChoice(value: "pro", label: "pro"),
+        ]))
+        XCTAssertEqual(byKey["size"]?.kind, .choice([
+            ElicitationChoice(value: "s", label: "Small"),
+            ElicitationChoice(value: "m", label: "Medium"),
+        ]))
+        XCTAssertEqual(byKey["tier"]?.kind, .choice([
+            ElicitationChoice(value: "a", label: "a"),
+            ElicitationChoice(value: "b", label: "b"),
+        ]))
+        XCTAssertEqual(
+            ElicitationForm.answer(fields, texts: ["plan": "basic", "size": "m"], toggles: [:]).content,
+            ["plan": .string("basic"), "size": .string("m")]
+        )
+    }
+
+    func testRequiredUnsupportedFieldLeavesOnlyNotNow() {
+        let properties: ElicitationValue = .object([
+            "name": .object(["type": .string("string")]),
+            "tags": .object(["type": .string("array")]),
+        ])
+        XCTAssertFalse(ElicitationForm.canSend(.object(["properties": properties, "required": .array([.string("name"), .string("tags")])])))
+        XCTAssertTrue(ElicitationForm.canSend(.object(["properties": properties, "required": .array([.string("name")])])))
+        XCTAssertTrue(ElicitationForm.canSend(.object(["properties": properties])))
+    }
+
+    func testAnsweredUrlStepCanReopenItsPage() {
+        func step(_ status: ElicitationStatus, mode: ElicitationMode = .url, url: String = "https://pay.example.com/step") -> Elicitation {
+            Elicitation(id: "e1", mode: mode, url: url, status: status)
+        }
+        XCTAssertEqual(ElicitationForm.reopenUrl(step(.answered))?.absoluteString, "https://pay.example.com/step")
+        for status in [ElicitationStatus.pending, .declined, .cancelled, .expired, .completed] {
+            XCTAssertNil(ElicitationForm.reopenUrl(step(status)), status.rawValue)
+        }
+        XCTAssertNil(ElicitationForm.reopenUrl(step(.answered, url: "http://pay.example.com/step")))
+        XCTAssertNil(ElicitationForm.reopenUrl(step(.answered, mode: .form)))
+    }
+
+    @MainActor
+    func testAnsweringAMissingStepFails() async throws {
+        let sdk = try LiveAndAiChat.Builder().config(LiveAndAiChatConfig(apiKey: "sk_live_k:secret")).build()
+        defer {
+            sdk.session.clear()
+            sdk.destroy()
+        }
+        sdk.store.setInitialMessages([stepMessage(.pending)])
+        sdk.session.conversationId = nil
+        await assertAnswerFails(sdk, messageId: "m1")
+        sdk.session.conversationId = "conv-1"
+        await assertAnswerFails(sdk, messageId: "unknown")
+        XCTAssertTrue(StubURLProtocol.requests.compactMap(answerVariables).isEmpty)
+    }
+
+    @MainActor
+    func testFailedAnswerRefreshesSteps() async throws {
+        stubAnswerFailureAndExpiredHistory()
+        let sdk = try LiveAndAiChat.Builder().config(LiveAndAiChatConfig(apiKey: "sk_live_k:secret")).build()
+        defer {
+            sdk.session.clear()
+            sdk.destroy()
+        }
+        sdk.session.conversationId = "conv-1"
+        sdk.store.setInitialMessages([stepMessage(.pending)])
+        await assertAnswerFails(sdk, messageId: "m1")
+        try await waitUntil { sdk.messages.first?.elicitation?.status == .expired }
+    }
+
+    @MainActor
+    func testReconnectRefreshesSteps() async throws {
+        stubAnswerFailureAndExpiredHistory()
+        let sdk = try LiveAndAiChat.Builder().config(LiveAndAiChatConfig(apiKey: "sk_live_k:secret")).build()
+        defer {
+            sdk.session.clear()
+            sdk.destroy()
+        }
+        sdk.session.conversationId = "conv-1"
+        sdk.store.setInitialMessages([stepMessage(.pending)])
+
+        sdk.transportStateChanged(.connected)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(StubURLProtocol.requests.contains { (requestJSON($0)?["query"] as? String)?.contains("GetCsMessages") == true })
+        XCTAssertEqual(sdk.messages.first?.elicitation?.status, .pending)
+
+        sdk.transportStateChanged(.disconnected)
+        sdk.transportStateChanged(.connected)
+        XCTAssertEqual(sdk.connectionState, .connected)
+        try await waitUntil { sdk.messages.first?.elicitation?.status == .expired }
+    }
+
+    @MainActor
+    private func assertAnswerFails(_ sdk: LiveAndAiChat, messageId: String) async {
+        do {
+            try await sdk.answerElicitation(messageId: messageId, action: .decline)
+            XCTFail("expected the answer to fail for \(messageId)")
+        } catch {}
+    }
+
+    private func stubAnswerFailureAndExpiredHistory() {
+        StubURLProtocol.reset { request in
+            let query = requestJSON(request)?["query"] as? String ?? ""
+            if query.contains("GetCsMessages") {
+                let payload: [String: Any] = ["data": ["getCsMessages": [[
+                    "id": "m1", "conversationId": "conv-1", "content": "Please confirm", "type": "AI", "seq": 1,
+                    "elicitation": ["id": "e1", "mode": "FORM", "message": "Please confirm", "status": "EXPIRED"],
+                ]]]]
+                return (200, try! JSONSerialization.data(withJSONObject: payload))
+            }
+            return (200, Data(#"{"errors":[{"message":"Step expired","extensions":{"code":"BAD_USER_INPUT"}}]}"#.utf8))
+        }
     }
 
     func testSendsIos050Header() {

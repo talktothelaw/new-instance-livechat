@@ -11,7 +11,7 @@ struct MessageRow: View {
     let onRetry: (String) -> Void
     let onImageTap: (MessageAttachment) -> Void
     let onImageLoaded: () -> Void
-    let onAnswer: (String, ElicitationAction, [String: JSONValue]?) async throws -> Void
+    let onAnswer: (String, ElicitationAction, [String: ElicitationValue]?) async throws -> Void
     let onOpenStep: (URL) -> Bool
     @Environment(\.chatColors) private var colors
 

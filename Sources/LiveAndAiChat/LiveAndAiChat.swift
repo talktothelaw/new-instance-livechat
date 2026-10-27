@@ -590,20 +590,21 @@ public final class LiveAndAiChat: ObservableObject {
         }
     }
 
-    public func answerElicitation(messageId: String, action: ElicitationAction, content: [String: JSONValue]? = nil) async throws {
+    public func answerElicitation(messageId: String, action: ElicitationAction, content: [String: ElicitationValue]? = nil) async throws {
         precondition(!destroyed, "SDK has been destroyed")
         guard let convId = session.conversationId,
               let step = store.messages.first(where: { $0.id == messageId })?.elicitation
-        else { return }
+        else { throw LiveAndAiChatError(type: .validation, message: "There is no step to answer for this message.", recoverable: false) }
         var vars: [String: Any] = ["conversationId": convId, "elicitationId": step.id, "action": action.rawValue]
         if action == .accept, step.mode == .form, let content {
-            vars["content"] = JSONValue.object(content).foundationValue
+            vars["content"] = ElicitationValue.object(content).foundationValue
         }
         do {
             try await gql.execute(query: Operations.answerElicitation, variables: vars)
-        } catch let e as LiveAndAiChatError {
-            emitError(e)
-            throw e
+        } catch {
+            if let e = error as? LiveAndAiChatError { emitError(e) }
+            Task { [weak self] in await self?.runGapFill(conversationId: convId) }
+            throw error
         }
     }
 
@@ -770,6 +771,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// (typical when the app un-backgrounds and replays a queue)
     /// triggers a single fetch ~250ms after the last event.
     private var gapFillDebounceTasks: [String: Task<Void, Never>] = [:]
+    private var transportConnectedBefore = false
 
     /// Compare the `totalMessages` field carried by a `csMessageReceived`
     /// event against the local store. If the server has more than we do,
@@ -849,11 +851,18 @@ public final class LiveAndAiChat: ObservableObject {
         subscriptionClient = client
         connectionSubscription = client.connectionStatePublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.connectionState = state
-                self?.emitConnection(state)
-            }
+            .sink { [weak self] state in self?.transportStateChanged(state) }
         client.start()
+    }
+
+    func transportStateChanged(_ state: ConnectionState) {
+        let reconnected = state == .connected && connectionState != .connected && transportConnectedBefore
+        if state == .connected { transportConnectedBefore = true }
+        connectionState = state
+        emitConnection(state)
+        if reconnected, let conversationId = session.conversationId {
+            Task { [weak self] in await self?.runGapFill(conversationId: conversationId) }
+        }
     }
 
     private func subscribeAll(conversationId: String) {

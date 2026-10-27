@@ -64,11 +64,11 @@ public struct Elicitation: Codable, Equatable, Sendable {
     public let id: String
     public let mode: ElicitationMode
     public let message: String?
-    public let requestedSchema: JSONValue?
+    public let requestedSchema: ElicitationValue?
     public let url: String?
     public let status: ElicitationStatus
 
-    public init(id: String, mode: ElicitationMode, message: String? = nil, requestedSchema: JSONValue? = nil, url: String? = nil, status: ElicitationStatus) {
+    public init(id: String, mode: ElicitationMode, message: String? = nil, requestedSchema: ElicitationValue? = nil, url: String? = nil, status: ElicitationStatus) {
         self.id = id
         self.mode = mode
         self.message = message

@@ -1,11 +1,11 @@
 import Foundation
 
-public enum JSONValue: Codable, Equatable, Sendable {
+public enum ElicitationValue: Codable, Equatable, Sendable {
     case string(String)
     case number(Double)
     case bool(Bool)
-    case object([String: JSONValue])
-    case array([JSONValue])
+    case object([String: ElicitationValue])
+    case array([ElicitationValue])
     case null
 
     public init(from decoder: Decoder) throws {
@@ -18,10 +18,10 @@ public enum JSONValue: Codable, Equatable, Sendable {
             self = .number(v)
         } else if let v = try? c.decode(String.self) {
             self = .string(v)
-        } else if let v = try? c.decode([JSONValue].self) {
+        } else if let v = try? c.decode([ElicitationValue].self) {
             self = .array(v)
         } else {
-            self = .object(try c.decode([String: JSONValue].self))
+            self = .object(try c.decode([String: ElicitationValue].self))
         }
     }
 
