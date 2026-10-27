@@ -22,7 +22,7 @@ struct MessageList: View {
     let onRetry: (String) -> Void
     let onImageTap: (MessageAttachment) -> Void
     let onAnswer: (String, ElicitationAction, [String: JSONValue]?) async throws -> Void
-    let onOpenStep: (URL) -> Void
+    let onOpenStep: (URL) -> Bool
     @Environment(\.chatColors) private var colors
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

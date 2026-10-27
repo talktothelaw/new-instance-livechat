@@ -12,7 +12,7 @@ struct MessageRow: View {
     let onImageTap: (MessageAttachment) -> Void
     let onImageLoaded: () -> Void
     let onAnswer: (String, ElicitationAction, [String: JSONValue]?) async throws -> Void
-    let onOpenStep: (URL) -> Void
+    let onOpenStep: (URL) -> Bool
     @Environment(\.chatColors) private var colors
 
     var body: some View {

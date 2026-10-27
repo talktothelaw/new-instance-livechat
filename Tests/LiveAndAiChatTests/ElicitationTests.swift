@@ -297,6 +297,31 @@ final class ElicitationTests: XCTestCase {
         XCTAssertEqual(ElicitationForm.statusLine(.completed), "Done")
     }
 
+    func testUnknownStepKindsRenderAsPlainText() throws {
+        let unknown: [[String: Any]] = [
+            ["id": "e1", "mode": "WIZARD", "status": "PENDING"],
+            ["id": "e2", "mode": "FORM", "status": "ARCHIVED"],
+            ["id": "e3", "mode": "URL", "url": "https://pay.example.com", "status": "SUPERSEDED"],
+            ["id": "e4", "status": "PENDING"],
+            ["id": "e5", "mode": "FORM"],
+        ]
+        for step in unknown {
+            let msg = try GqlClient.decode(ChatMessage.self, from: [
+                "id": "m1", "conversationId": "c1", "type": "AI", "content": "Plain reply", "elicitation": step,
+            ])
+            XCTAssertNil(msg.elicitation, "\(step)")
+            XCTAssertEqual(msg.content, "Plain reply")
+        }
+        for (mode, expected) in [("FORM", ElicitationMode.form), ("URL", .url)] {
+            let msg = try GqlClient.decode(ChatMessage.self, from: [
+                "id": "m1", "conversationId": "c1", "type": "AI",
+                "elicitation": ["id": "e1", "mode": mode, "status": "EXPIRED"],
+            ])
+            XCTAssertEqual(msg.elicitation?.mode, expected)
+            XCTAssertEqual(msg.elicitation.map { ElicitationForm.statusLine($0.status) }, "This step expired")
+        }
+    }
+
     func testRefusesNonHttpsStepUrl() {
         for raw in [nil, "", "http://pay.example.com/step", "javascript:alert(1)", "not a url", "https://", "ftp://pay.example.com"] {
             XCTAssertNil(ElicitationForm.secureUrl(raw), raw ?? "nil")
@@ -321,3 +346,53 @@ final class ElicitationTests: XCTestCase {
         return json["variables"] as? [String: Any]
     }
 }
+
+#if canImport(UIKit)
+import UIKit
+import SafariServices
+
+private final class FakeController: UIViewController {
+    var shown: UIViewController?
+    var refuses = false
+    var dismissing = false
+    override var presentedViewController: UIViewController? { shown }
+    override var isBeingDismissed: Bool { dismissing }
+    override func present(_ controller: UIViewController, animated: Bool, completion: (() -> Void)? = nil) {
+        if !refuses && shown == nil { shown = controller }
+    }
+}
+
+@MainActor
+final class SecurePagePresenterTests: XCTestCase {
+    private let page = URL(string: "https://pay.example.com/step")!
+
+    func testPresentsHttpsPageOverTheTopViewController() {
+        let root = FakeController()
+        XCTAssertTrue(LiveAndAiChat.presentSecurePage(page, over: root))
+        XCTAssertTrue(root.shown is SFSafariViewController)
+
+        let chat = FakeController()
+        let host = FakeController()
+        host.shown = chat
+        XCTAssertTrue(LiveAndAiChat.presentSecurePage(page, over: host))
+        XCTAssertTrue(chat.shown is SFSafariViewController)
+    }
+
+    func testReportsFailureWhenThePageCannotBePresented() {
+        XCTAssertFalse(LiveAndAiChat.presentSecurePage(page, over: nil))
+        XCTAssertFalse(LiveAndAiChat.presentSecurePage(URL(string: "http://pay.example.com/step")!, over: FakeController()))
+        XCTAssertFalse(LiveAndAiChat.presentSecurePage(page, over: UIViewController()))
+
+        let refusing = FakeController()
+        refusing.refuses = true
+        XCTAssertFalse(LiveAndAiChat.presentSecurePage(page, over: refusing))
+
+        let closing = FakeController()
+        closing.dismissing = true
+        let host = FakeController()
+        host.shown = closing
+        XCTAssertFalse(LiveAndAiChat.presentSecurePage(page, over: host))
+        XCTAssertFalse(closing.shown is SFSafariViewController)
+    }
+}
+#endif

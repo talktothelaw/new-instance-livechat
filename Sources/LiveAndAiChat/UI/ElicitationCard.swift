@@ -118,7 +118,7 @@ struct ElicitationCard: View {
     let prompt: String
     let elicitation: Elicitation
     let onAnswer: (ElicitationAction, [String: JSONValue]?) async throws -> Void
-    let onOpen: (URL) -> Void
+    let onOpen: (URL) -> Bool
     @Environment(\.chatColors) private var colors
 
     var body: some View {
@@ -137,7 +137,7 @@ private struct PendingStep: View {
     let prompt: String
     let elicitation: Elicitation
     let onAnswer: (ElicitationAction, [String: JSONValue]?) async throws -> Void
-    let onOpen: (URL) -> Void
+    let onOpen: (URL) -> Bool
     @Environment(\.chatColors) private var colors
     @State private var texts: [String: String] = [:]
     @State private var toggles: [String: Bool] = [:]
@@ -287,7 +287,11 @@ private struct PendingStep: View {
 
     private func open(_ url: URL) {
         guard !busy else { return }
-        onOpen(url)
+        failed = false
+        guard onOpen(url) else {
+            failed = true
+            return
+        }
         submit(.accept, nil)
     }
 

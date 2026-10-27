@@ -51,12 +51,17 @@ public extension LiveAndAiChat {
 }
 
 extension LiveAndAiChat {
-    func openSecurePage(_ url: URL) {
-        guard let url = ElicitationForm.secureUrl(url.absoluteString) else { return }
+    func openSecurePage(_ url: URL) -> Bool {
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
-        var top = (windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController
-        while let presented = top?.presentedViewController { top = presented }
-        top?.present(SFSafariViewController(url: url), animated: true)
+        return Self.presentSecurePage(url, over: (windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController)
+    }
+
+    static func presentSecurePage(_ url: URL, over root: UIViewController?) -> Bool {
+        guard let url = ElicitationForm.secureUrl(url.absoluteString), var top = root else { return false }
+        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        let page = SFSafariViewController(url: url)
+        top.present(page, animated: true)
+        return top.presentedViewController === page
     }
 }
 
