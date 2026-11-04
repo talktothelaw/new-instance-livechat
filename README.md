@@ -446,8 +446,6 @@ When the merchant turns on `Ask customers to rate`, the chat shows a rating card
 
 The card appears even if the chat was ended while the app was closed, as long as the saved conversation is resumed. Changing the customer (`setUserToken(_:)` with a different customer, or `setUser(_:)` with a different identity) removes the card.
 
-Apps with their own chat UI can call `submitRating(score:comment:)` (score 1 to 5) and `skipRating()`.
-
 ## Privacy
 
 The SDK does not require any `Info.plist` permission keys. The built-in

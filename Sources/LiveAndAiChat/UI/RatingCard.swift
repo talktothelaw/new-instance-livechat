@@ -41,6 +41,7 @@ struct RatingCard: View {
                     .foregroundColor(colors.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityAddTraits(.updatesFrequently)
+                    .onAppear { UIAccessibility.post(notification: .announcement, argument: RatingCopy.thanks) }
             } else {
                 Text(verbatim: RatingCopy.title(agentName: rating.agentName))
                     .font(.subheadline.weight(.semibold))
@@ -54,7 +55,7 @@ struct RatingCard: View {
                         } label: {
                             Image(systemName: value <= score ? "star.fill" : "star")
                                 .font(.title2)
-                                .foregroundColor(value <= score ? colors.warningColor : colors.textSecondary)
+                                .foregroundColor(value <= score ? colors.sendButtonBg : colors.textSecondary)
                                 .frame(minWidth: 44, minHeight: 44)
                         }
                         .buttonStyle(.plain)

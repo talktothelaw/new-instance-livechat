@@ -28,6 +28,7 @@ final class ChatStore: ObservableObject {
 
     static let maxRatingComment = 1000
     static let ratingNotAllowed = "RATING_NOT_ALLOWED"
+    static let ratingsOff = "RATINGS_OFF"
 
     private let fetchConversation: (String) async throws -> Conversation?
     private let rate: (String, Int?, String?, Bool) async throws -> Void
@@ -96,7 +97,12 @@ final class ChatStore: ObservableObject {
         do {
             try await rate(id, score, comment, skip)
         } catch {
-            if (error as? LiveAndAiChatError)?.code == Self.ratingNotAllowed { clear() } else { setStatus(.error) }
+            guard let refusal = error as? LiveAndAiChatError, refusal.code == Self.ratingNotAllowed else {
+                setStatus(.error)
+                return
+            }
+            if refusal.reason == Self.ratingsOff { ratingsEnabled = false }
+            clear()
             return
         }
         if skip { return clear() }

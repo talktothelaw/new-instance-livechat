@@ -101,6 +101,7 @@ public struct ChatScreen: View {
                     onSubmit: { score, comment in sdk.submitRating(score: score, comment: comment) },
                     onSkip: { sdk.skipRating() }
                 )
+                .id(rating.conversationId)
                 .environment(\.chatColors, colors)
             }
 

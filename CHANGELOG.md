@@ -2,9 +2,9 @@
 
 ## 0.6.0
 
-- Chat rating. When the merchant turns on `Ask customers to rate`, a card above the composer asks `How was your chat with {agent name}?` (or `How was your chat?`) after a chat is resolved or closed and the customer wrote at least one message. It has five stars (VoiceOver: `1 star` to `5 stars`), an optional comment up to 1000 characters, `Send` and `Skip`, then `Thanks for your feedback.` for about 2 seconds. A failed send shows `Could not send your rating. Try again.` and keeps the card; a server refusal with code `RATING_NOT_ALLOWED` removes it silently. The composer is never disabled and the card works in the iPad panel.
+- Chat rating. When the merchant turns on `Ask customers to rate`, a card above the composer asks `How was your chat with {agent name}?` (or `How was your chat?`) after a chat is resolved or closed and the customer wrote at least one message. It has five stars (VoiceOver: `1 star` to `5 stars`), an optional comment up to 1000 characters, `Send` and `Skip`, then `Thanks for your feedback.` for about 2 seconds. A failed send shows `Could not send your rating. Try again.` and keeps the card; a server refusal with code `RATING_NOT_ALLOWED` removes it silently, and a refusal because ratings were switched off stops the card for later chats until the configuration is loaded again. The composer is never disabled and the card works in the iPad panel.
 - The card is captured on every way a chat ends: the realtime update, a send that finds the chat closed, and resuming an already ended chat. It survives the SDK clearing the saved conversation, and a change of customer removes it.
-- New `submitRating(score:comment:)` and `skipRating()` for apps with their own chat UI.
+- New `submitRating(score:comment:)` and `skipRating()`, used by the built-in rating card.
 - `OrgSettings.ratingsEnabled`, `Conversation.lastCustomerMessageAt` and `Conversation.rating` are new.
 - Requires a NewInstance server with chat ratings support. Every request sends `x-newinstance-sdk: ios/0.6.0`.
 

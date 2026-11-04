@@ -88,6 +88,48 @@ final class RatingStoreTests: XCTestCase {
         XCTAssertNil(s.pendingRating)
     }
 
+    func testRatingsOffRefusalTurnsRatingsOff() async {
+        var refused = refusal(ChatStore.ratingNotAllowed)
+        refused.reason = ChatStore.ratingsOff
+        let error = refused
+        let s = store(rate: { _, _, _, _ in throw error })
+        await s.capturePendingRating(conversationId: "conv-1")
+        await s.submitRating(score: 3, comment: nil)
+        XCTAssertNil(s.pendingRating)
+        XCTAssertFalse(s.ratingsEnabled)
+        await s.capturePendingRating(conversationId: "conv-2")
+        XCTAssertNil(s.pendingRating)
+    }
+
+    func testOtherRefusalsKeepRatingsOn() async {
+        var refused = refusal(ChatStore.ratingNotAllowed)
+        refused.reason = "ALREADY_RATED"
+        let error = refused
+        let s = store(rate: { _, _, _, _ in throw error })
+        await s.capturePendingRating(conversationId: "conv-1")
+        await s.submitRating(score: 3, comment: nil)
+        XCTAssertNil(s.pendingRating)
+        XCTAssertTrue(s.ratingsEnabled)
+    }
+
+    func testGqlClientReadsTheRefusalReason() async throws {
+        StubURLProtocol.reset { _ in
+            (200, Data(#"{"errors":[{"message":"no","extensions":{"code":"RATING_NOT_ALLOWED","reason":"RATINGS_OFF"}}]}"#.utf8))
+        }
+        let gql = GqlClient(
+            endpoint: URL(string: "https://chat.example.com/service")!,
+            credential: ChatCredential(.apiKey("sk_live_keyid:secret")),
+            session: URLSession(configuration: StubURLProtocol.configuration())
+        )
+        do {
+            try await gql.execute(query: Operations.rateConversation, variables: ["conversationId": "conv-1", "score": 3])
+            XCTFail("expected a refusal")
+        } catch let error as LiveAndAiChatError {
+            XCTAssertEqual(error.code, ChatStore.ratingNotAllowed)
+            XCTAssertEqual(error.reason, ChatStore.ratingsOff)
+        }
+    }
+
     func testKeepsCardOnNetworkError() async {
         let s = store(rate: { _, _, _, _ in throw LiveAndAiChatError(type: .network, message: "down", recoverable: true) })
         await s.capturePendingRating(conversationId: "conv-1")
