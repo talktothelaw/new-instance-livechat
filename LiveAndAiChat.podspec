@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
     "newinstance.cloud"          => "support@newinstance.cloud",
     "Nwoko Lawrence Ndubueze"    => "nwokolawrence6@gmail.com"
   }
-  s.platform      = :ios, "14.0"
+  s.platform      = :ios, "15.0"
   s.swift_version = "5.9"
   s.source        = {
     :git => "https://github.com/talktothelaw/new-instance-livechat.git",

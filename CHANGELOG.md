@@ -7,6 +7,7 @@
 - New `submitRating(score:comment:)` and `skipRating()`, used by the built-in rating card.
 - `OrgSettings.ratingsEnabled`, `Conversation.lastCustomerMessageAt` and `Conversation.rating` are new.
 - Requires a NewInstance server with chat ratings support. Every request sends `x-newinstance-sdk: ios/0.6.0`.
+- CocoaPods: the minimum is now iOS 15.0, the lowest target current Xcode builds. The Swift package still declares iOS 14.0.
 
 ## 0.5.0
 

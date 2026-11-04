@@ -14,7 +14,7 @@ your iOS app. Hosted by [newinstance.cloud](https://newinstance.cloud).
 
 ## Requirements
 
-- iOS 14.0+
+- iOS 15.0+ with CocoaPods, iOS 14.0+ with Swift Package Manager
 - Swift 5.9 (Xcode 15+)
 
 ## Installation
