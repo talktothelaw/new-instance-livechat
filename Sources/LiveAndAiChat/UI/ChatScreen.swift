@@ -95,6 +95,15 @@ public struct ChatScreen: View {
             }
             .frame(maxHeight: .infinity)
 
+            if let rating = store.pendingRating {
+                RatingCard(
+                    rating: rating,
+                    onSubmit: { score, comment in sdk.submitRating(score: score, comment: comment) },
+                    onSkip: { sdk.skipRating() }
+                )
+                .environment(\.chatColors, colors)
+            }
+
             Composer(
                 placeholderText: sdk.orgConfig?.settings.placeholderText.isEmpty == false
                     ? sdk.orgConfig!.settings.placeholderText

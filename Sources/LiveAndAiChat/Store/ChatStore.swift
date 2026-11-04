@@ -1,6 +1,14 @@
 import Foundation
 import Combine
 
+enum RatingStatus: Equatable, Sendable { case idle, sending, sent, error }
+
+struct PendingRating: Equatable, Sendable {
+    let conversationId: String
+    let agentName: String?
+    var status: RatingStatus
+}
+
 /// In-memory state store for an active chat session. Mirrors the Android
 /// `ChatStore.kt` field-for-field — published properties replace Kotlin
 /// `StateFlow`. UI layers (SwiftUI views in Phase 2.B) and the SDK
@@ -14,6 +22,88 @@ final class ChatStore: ObservableObject {
     @Published private(set) var agentTyping: Bool = false
     @Published private(set) var unreadCount: Int = 0
     @Published private(set) var draftText: String = ""
+    @Published private(set) var pendingRating: PendingRating?
+
+    var ratingsEnabled = false
+
+    static let maxRatingComment = 1000
+    static let ratingNotAllowed = "RATING_NOT_ALLOWED"
+
+    private let fetchConversation: (String) async throws -> Conversation?
+    private let rate: (String, Int?, String?, Bool) async throws -> Void
+    private let clearDelayMs: UInt64
+    private var ratingEpoch = 0
+    private var capturesInFlight: Set<String> = []
+
+    init(
+        fetchConversation: @escaping (String) async throws -> Conversation? = { _ in nil },
+        rate: @escaping (String, Int?, String?, Bool) async throws -> Void = { _, _, _, _ in },
+        clearDelayMs: UInt64 = 2000
+    ) {
+        self.fetchConversation = fetchConversation
+        self.rate = rate
+        self.clearDelayMs = clearDelayMs
+    }
+
+    func discardPendingRating() {
+        ratingEpoch += 1
+        capturesInFlight.removeAll()
+        pendingRating = nil
+    }
+
+    func capturePendingRating(conversationId: String) async {
+        guard ratingsEnabled else { return }
+        if let existing = pendingRating, existing.conversationId == conversationId, existing.status != .idle { return }
+        guard capturesInFlight.insert(conversationId).inserted else { return }
+        let epoch = ratingEpoch
+        let conversation = try? await fetchConversation(conversationId)
+        if epoch == ratingEpoch { capturesInFlight.remove(conversationId) }
+        guard epoch == ratingEpoch, let conversation else { return }
+        if let current = pendingRating, current.conversationId == conversationId, current.status != .idle { return }
+        let ended = conversation.status == .resolved || conversation.status == .closed
+        guard ended, conversation.rating == nil, conversation.lastCustomerMessageAt != nil else { return }
+        pendingRating = PendingRating(
+            conversationId: conversationId,
+            agentName: conversation.assignedAgentId != nil ? conversation.assignedAgentName : nil,
+            status: .idle
+        )
+    }
+
+    func submitRating(score: Int, comment: String?) async {
+        guard (1...5).contains(score) else { return }
+        let trimmed = comment?.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxRatingComment)
+        let cleaned = trimmed.map(String.init).flatMap { $0.isEmpty ? nil : $0 }
+        await sendRating(score: score, comment: cleaned, skip: false)
+    }
+
+    func skipRating() async {
+        await sendRating(score: nil, comment: nil, skip: true)
+    }
+
+    private func sendRating(score: Int?, comment: String?, skip: Bool) async {
+        guard let pending = pendingRating, pending.status == .idle || pending.status == .error else { return }
+        let id = pending.conversationId
+        let epoch = ratingEpoch
+        func setStatus(_ status: RatingStatus) {
+            guard epoch == ratingEpoch, pendingRating?.conversationId == id else { return }
+            pendingRating?.status = status
+        }
+        func clear() {
+            guard epoch == ratingEpoch, pendingRating?.conversationId == id else { return }
+            pendingRating = nil
+        }
+        setStatus(.sending)
+        do {
+            try await rate(id, score, comment, skip)
+        } catch {
+            if (error as? LiveAndAiChatError)?.code == Self.ratingNotAllowed { clear() } else { setStatus(.error) }
+            return
+        }
+        if skip { return clear() }
+        setStatus(.sent)
+        try? await Task.sleep(nanoseconds: clearDelayMs * 1_000_000)
+        clear()
+    }
 
     func updateDraft(_ text: String) {
         draftText = text
@@ -101,6 +191,7 @@ final class ChatStore: ObservableObject {
     }
 
     func reset() {
+        discardPendingRating()
         draftText = ""
         flowState = .idle
         messages = []

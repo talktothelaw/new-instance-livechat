@@ -99,6 +99,14 @@ public final class LiveAndAiChat: ObservableObject {
     public var unreadCount: Int { store.unreadCount }
     public var draftText: String { store.draftText }
 
+    public func submitRating(score: Int, comment: String?) {
+        Task { await store.submitRating(score: score, comment: comment) }
+    }
+
+    public func skipRating() {
+        Task { await store.skipRating() }
+    }
+
     public func updateDraft(_ text: String) {
         store.updateDraft(text)
     }
@@ -146,9 +154,28 @@ public final class LiveAndAiChat: ObservableObject {
         self.config = config
         self.credential = credential
         self.user = config.authMode == .apiKey ? user : nil
-        self.gql = GqlClient(endpoint: config.gqlEndpoint, credential: credential)
+        let gql = GqlClient(endpoint: config.gqlEndpoint, credential: credential)
+        self.gql = gql
         self.session = SessionManager()
-        self.store = ChatStore()
+        self.store = ChatStore(
+            fetchConversation: { conversationId in
+                let data = try await gql.execute(
+                    query: Operations.getConversationState,
+                    variables: ["conversationId": conversationId]
+                )
+                guard let state = data["getCsConversationState"] as? [String: Any],
+                      let node = state["conversation"] as? [String: Any]
+                else { return nil }
+                return try GqlClient.decode(Conversation.self, from: node)
+            },
+            rate: { conversationId, score, comment, skip in
+                var vars: [String: Any] = ["conversationId": conversationId]
+                if skip { vars["skip"] = true }
+                if let score { vars["score"] = score }
+                if let comment { vars["comment"] = comment }
+                try await gql.execute(query: Operations.rateConversation, variables: vars)
+            }
+        )
         self.attachmentQueue = AttachmentQueue()
         self.uploader = FileUploader(gql: GqlClient(endpoint: config.gqlEndpoint, credential: credential))
         self.networkMonitor = NetworkMonitor()
@@ -192,7 +219,9 @@ public final class LiveAndAiChat: ObservableObject {
     public func setUser(_ user: ChatUser) {
         precondition(!destroyed, "SDK has been destroyed")
         guard config.authMode == .apiKey else { return }
+        let previousIdentity = currentIdentityKey
         self.user = user
+        if previousIdentity != nil, currentIdentityKey != previousIdentity { store.discardPendingRating() }
         session.customerName = user.customerName
         session.customerEmail = user.customerEmail
         session.customerId = user.customerId
@@ -214,6 +243,7 @@ public final class LiveAndAiChat: ObservableObject {
         let wasConnected = subscriptionClient != nil
         stopSubscriptions()
         if identityChanged {
+            store.discardPendingRating()
             session.clear()
             clearConversationState()
         }
@@ -357,6 +387,7 @@ public final class LiveAndAiChat: ObservableObject {
             store.mergeMessage(optimistic)
             Task { [weak self] in
                 await self?.recoverFromClosedAndResend(
+                    endedConversationId: nil,
                     content: content,
                     clientId: clientId,
                     optimisticId: optimisticId,
@@ -658,6 +689,9 @@ public final class LiveAndAiChat: ObservableObject {
             connectTransport()
             subscribeAll(conversationId: conversationId)
             await fetchOrgConfig()
+            if store.flowState == .ended {
+                Task { [weak self] in await self?.store.capturePendingRating(conversationId: conversationId) }
+            }
             lifecycle = .ready
         } catch let e as LiveAndAiChatError {
             emitError(e)
@@ -681,6 +715,7 @@ public final class LiveAndAiChat: ObservableObject {
               let cfg = try? GqlClient.decode(OrgChatConfig.self, from: node)
         else { return }
         orgConfig = cfg
+        store.ratingsEnabled = cfg.settings.ratingsEnabled
     }
 
     private func ensureSession() async throws -> String {
@@ -931,6 +966,8 @@ public final class LiveAndAiChat: ObservableObject {
             // (or the auto-resend inside `recoverFromClosedAndResend`)
             // triggers a fresh `initCsAiChat`. Mirrors Android.
             if conv.status == .closed || conv.status == .resolved {
+                let endedConversationId = conv.id
+                Task { [weak self] in await self?.store.capturePendingRating(conversationId: endedConversationId) }
                 SseLog.debug("conversation \(conv.id.suffix(8)) ended (\(conv.status.rawValue)) — clearing session for next-message restart")
                 self.session.conversationId = nil
                 self.session.assignmentId = nil
@@ -1000,6 +1037,7 @@ public final class LiveAndAiChat: ObservableObject {
     ///      `clientId`. The new conversation absorbs it; the agent
     ///      sees the message in a fresh thread.
     private func recoverFromClosedAndResend(
+        endedConversationId: String?,
         content: String,
         clientId: String,
         optimisticId: String,
@@ -1009,6 +1047,9 @@ public final class LiveAndAiChat: ObservableObject {
             // (1) drop the optimistic entry so the user doesn't stare
             //     at a "sent" bubble that never reached anybody.
             self.store.removeMessage(optimisticId)
+            if let endedConversationId {
+                Task { [weak self] in await self?.store.capturePendingRating(conversationId: endedConversationId) }
+            }
             // (2) wipe the dead conversation pointers.
             self.session.conversationId = nil
             self.session.assignmentId = nil
@@ -1094,6 +1135,7 @@ public final class LiveAndAiChat: ObservableObject {
                 // SAME `clientId` so any optimistic echo de-dupes.
                 SseLog.debug("send · conversation closed — restarting chat and resending")
                 await recoverFromClosedAndResend(
+                    endedConversationId: convId,
                     content: content,
                     clientId: clientId,
                     optimisticId: optimisticId,
@@ -1150,7 +1192,7 @@ public final class LiveAndAiChat: ObservableObject {
     /// the same `sdk.openChat()` pattern as on Android.
     @MainActor public static func current() -> LiveAndAiChat? { currentInstance }
 
-    nonisolated public static let version = "0.5.0"
+    nonisolated public static let version = "0.6.0"
 }
 
 /// Callback-style delegate alternative to Combine subscriptions. Optional

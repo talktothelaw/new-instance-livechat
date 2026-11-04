@@ -28,7 +28,7 @@ enum Operations {
           }
           backgroundImage { enabled url opacity position size repeat overlayColor overlayOpacity }
         }
-        settings { welcomeMessage offlineMessage placeholderText enableFileUpload enableEmojis enableTypingIndicator requireCustomerEmail }
+        settings { welcomeMessage offlineMessage placeholderText enableFileUpload enableEmojis enableTypingIndicator requireCustomerEmail ratingsEnabled }
         widget { position size theme showOnlineStatus enableSounds }
         chatInterface { enabled }
         aiChatbot { enabled }
@@ -76,7 +76,7 @@ enum Operations {
     static let getConversationState = """
     query GetCsConversationState($conversationId: ID!) {
       getCsConversationState(conversationId: $conversationId) {
-        conversation { id status assignedAgentId assignedAgentName }
+        conversation { id status assignedAgentId assignedAgentName lastCustomerMessageAt rating { score skipped } }
         assignment { id conversationId status assignedAgentId assignedAgentName queuePosition estimatedWaitTime }
       }
     }
@@ -201,6 +201,14 @@ enum Operations {
     static let confirmFileUpload = """
     mutation ConfirmFileUpload($fileId: String!) {
       confirmFileUpload(fileId: $fileId) { fileId publicUrl }
+    }
+    """
+
+    static let rateConversation = """
+    mutation RateCsConversation($conversationId: ID!, $score: Int, $comment: String, $skip: Boolean) {
+      rateCsConversation(conversationId: $conversationId, score: $score, comment: $comment, skip: $skip) {
+        score skipped
+      }
     }
     """
 }

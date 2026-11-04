@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Chat rating. When the merchant turns on `Ask customers to rate`, a card above the composer asks `How was your chat with {agent name}?` (or `How was your chat?`) after a chat is resolved or closed and the customer wrote at least one message. It has five stars (VoiceOver: `1 star` to `5 stars`), an optional comment up to 1000 characters, `Send` and `Skip`, then `Thanks for your feedback.` for about 2 seconds. A failed send shows `Could not send your rating. Try again.` and keeps the card; a server refusal with code `RATING_NOT_ALLOWED` removes it silently. The composer is never disabled and the card works in the iPad panel.
+- The card is captured on every way a chat ends: the realtime update, a send that finds the chat closed, and resuming an already ended chat. It survives the SDK clearing the saved conversation, and a change of customer removes it.
+- New `submitRating(score:comment:)` and `skipRating()` for apps with their own chat UI.
+- `OrgSettings.ratingsEnabled`, `Conversation.lastCustomerMessageAt` and `Conversation.rating` are new.
+- Requires a NewInstance server with chat ratings support. Every request sends `x-newinstance-sdk: ios/0.6.0`.
+
 ## 0.5.0
 
 - Chat steps from connected MCP servers: forms and secure pages. An AI message can carry a step (`ChatMessage.elicitation`). The chat shows it as a card: a form built from the step's fields (text, choice, number and toggle; other field types are skipped) with `Send` and `Not now`, or a secure page with `Open secure page` and `Not now`. A choice comes from `enum` (labelled by `enumNames` when it has one name per value) or from `oneOf` entries with `const` and `title`. If a required field has a type this version does not show, the card offers only `Not now`. Secure pages open only `https` links, in an in-app Safari view, and the card names the host the customer finishes on (without `:443`). If the page cannot be shown, the card says `Could not send your answer. Try again.` and sends nothing. A step with a mode or status this version does not know shows as a plain message. When the server re-sends the message with a new status, the card keeps the prompt and shows `Sent`, `Declined`, `Cancelled`, `This step expired` or `Done` below it. A secure page step that shows `Sent` keeps `Open secure page`, which only opens the page again, until it is done, expires or is cancelled. Answers go only to the `answerCsElicitation` mutation and are never logged or stored.
