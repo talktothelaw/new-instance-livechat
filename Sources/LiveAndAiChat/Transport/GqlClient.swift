@@ -95,13 +95,15 @@ final class GqlClient {
             default:
                 type = authRejected ? .auth : (status >= 500 ? .system : .network)
             }
-            throw LiveAndAiChatError(
+            var error = LiveAndAiChatError(
                 type: type,
                 message: message,
                 recoverable: type != .auth,
                 code: code,
                 conversationClosed: conversationClosed
             )
+            error.reason = extensions?["reason"] as? String
+            throw error
         }
 
         if status >= 400 {

@@ -31,7 +31,7 @@ Or in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.5.0"),
+    .package(url: "https://github.com/talktothelaw/new-instance-livechat.git", from: "0.6.0"),
 ],
 targets: [
     .target(
@@ -46,7 +46,7 @@ targets: [
 ### CocoaPods
 
 ```ruby
-pod 'LiveAndAiChat', '~> 0.5.0'
+pod 'LiveAndAiChat', '~> 0.6.0'
 ```
 
 ## Quick start
@@ -124,7 +124,7 @@ The SDK runs in exactly **one** of two modes, chosen by what you pass to
 | API key | `apiKey: "keyId:secret"` | `x-api-key: keyId:secret` | `setUser(_:)` |
 
 Every request (GraphQL, every SSE request, the WebSocket upgrade) also carries
-`x-newinstance-sdk: ios/0.5.0`. Passing both `apiKey` and `customerToken`, or
+`x-newinstance-sdk: ios/0.6.0`. Passing both `apiKey` and `customerToken`, or
 neither, throws (see [Configuration errors](#configuration-errors)).
 `config.authMode` tells you which mode is active.
 
@@ -439,6 +439,12 @@ scheme decides.
 If no dashboard configuration is reachable, your local theme still applies and
 the built-in palette fills the rest, so the chat is always fully themed, even
 offline. You get a `configFetchFailed` warning on the error channel.
+
+## Chat rating
+
+When the merchant turns on `Ask customers to rate`, the chat shows a rating card above the composer after a chat ends (resolved or closed) and the customer has written at least one message. The card asks `How was your chat with {agent name}?` (or `How was your chat?` when no person handled it), shows five stars (VoiceOver reads `1 star` to `5 stars`), an optional comment of up to 1000 characters, and `Send` and `Skip`. After a successful send it shows `Thanks for your feedback.` and disappears after about 2 seconds. A failed send keeps the card and shows `Could not send your rating. Try again.` If the server says there is nothing to rate (already rated, ratings switched off), the card goes away without a message. The composer stays usable, and the card works inside the iPad panel.
+
+The card appears even if the chat was ended while the app was closed, as long as the saved conversation is resumed. Changing the customer (`setUserToken(_:)` with a different customer, or `setUser(_:)` with a different identity) removes the card.
 
 ## Privacy
 

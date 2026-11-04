@@ -41,6 +41,7 @@ public struct LiveAndAiChatError: Error, CustomStringConvertible, Sendable {
     /// Mirrors the Android / web SDK behaviour.
     public let conversationClosed: Bool
     public let underlying: NSError?
+    var reason: String?
 
     public init(
         type: ChatErrorType,

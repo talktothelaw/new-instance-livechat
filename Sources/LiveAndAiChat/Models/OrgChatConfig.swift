@@ -197,6 +197,7 @@ public struct OrgSettings: Codable, Equatable, Sendable {
     public var enableEmojis: Bool
     public var enableTypingIndicator: Bool
     public var requireCustomerEmail: Bool
+    public var ratingsEnabled: Bool
 
     public init(
         welcomeMessage: String = "",
@@ -205,7 +206,8 @@ public struct OrgSettings: Codable, Equatable, Sendable {
         enableFileUpload: Bool = true,
         enableEmojis: Bool = true,
         enableTypingIndicator: Bool = true,
-        requireCustomerEmail: Bool = false
+        requireCustomerEmail: Bool = false,
+        ratingsEnabled: Bool = false
     ) {
         self.welcomeMessage = welcomeMessage
         self.offlineMessage = offlineMessage
@@ -214,6 +216,7 @@ public struct OrgSettings: Codable, Equatable, Sendable {
         self.enableEmojis = enableEmojis
         self.enableTypingIndicator = enableTypingIndicator
         self.requireCustomerEmail = requireCustomerEmail
+        self.ratingsEnabled = ratingsEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -225,7 +228,8 @@ public struct OrgSettings: Codable, Equatable, Sendable {
             enableFileUpload: (try c.decodeIfPresent(Bool.self, forKey: .enableFileUpload)) ?? true,
             enableEmojis: (try c.decodeIfPresent(Bool.self, forKey: .enableEmojis)) ?? true,
             enableTypingIndicator: (try c.decodeIfPresent(Bool.self, forKey: .enableTypingIndicator)) ?? true,
-            requireCustomerEmail: (try c.decodeIfPresent(Bool.self, forKey: .requireCustomerEmail)) ?? false
+            requireCustomerEmail: (try c.decodeIfPresent(Bool.self, forKey: .requireCustomerEmail)) ?? false,
+            ratingsEnabled: (try c.decodeIfPresent(Bool.self, forKey: .ratingsEnabled)) ?? false
         )
     }
 }

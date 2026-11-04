@@ -8,6 +8,24 @@ public enum ConversationStatus: String, Codable, Sendable {
     case resolved = "RESOLVED"
 }
 
+public struct ConversationRating: Codable, Equatable, Sendable {
+    public let score: Int?
+    public let skipped: Bool
+
+    public init(score: Int?, skipped: Bool) {
+        self.score = score
+        self.skipped = skipped
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        score = try c.decodeIfPresent(Int.self, forKey: .score)
+        skipped = try c.decodeIfPresent(Bool.self, forKey: .skipped) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey { case score, skipped }
+}
+
 public struct Conversation: Codable, Equatable, Sendable {
     public let id: String
     public let status: ConversationStatus
@@ -17,6 +35,8 @@ public struct Conversation: Codable, Equatable, Sendable {
     public let customerEmail: String?
     public let createdAt: String?
     public let updatedAt: String?
+    public let lastCustomerMessageAt: String?
+    public let rating: ConversationRating?
 
     public init(
         id: String,
@@ -26,10 +46,14 @@ public struct Conversation: Codable, Equatable, Sendable {
         customerName: String? = nil,
         customerEmail: String? = nil,
         createdAt: String? = nil,
-        updatedAt: String? = nil
+        updatedAt: String? = nil,
+        lastCustomerMessageAt: String? = nil,
+        rating: ConversationRating? = nil
     ) {
         self.id = id
         self.status = status
+        self.lastCustomerMessageAt = lastCustomerMessageAt
+        self.rating = rating
         self.assignedAgentId = assignedAgentId
         self.assignedAgentName = assignedAgentName
         self.customerName = customerName
@@ -48,6 +72,8 @@ public struct Conversation: Codable, Equatable, Sendable {
         customerEmail = try c.decodeIfPresent(String.self, forKey: .customerEmail)
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(String.self, forKey: .updatedAt)
+        lastCustomerMessageAt = try c.decodeIfPresent(String.self, forKey: .lastCustomerMessageAt)
+        rating = try c.decodeIfPresent(ConversationRating.self, forKey: .rating)
     }
 }
 
