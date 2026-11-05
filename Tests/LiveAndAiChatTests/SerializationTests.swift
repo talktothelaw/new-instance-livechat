@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import LiveAndAiChat
 
 final class SerializationTests: XCTestCase {
@@ -57,8 +58,17 @@ final class SerializationTests: XCTestCase {
         let json = #"{"version":1}"#.data(using: .utf8)!
         let appearance = try JSONDecoder().decode(OrgAppearance.self, from: json)
         XCTAssertEqual(appearance.version, 1)
-        XCTAssertEqual(appearance.colors.headerBackground, "#9333EA")
-        XCTAssertEqual(appearance.colors.chatBackground, "#F7F7FB")
+        XCTAssertEqual(appearance.colors, OrgAppearanceColors())
+        XCTAssertNil(appearance.colors.headerBackground)
+        XCTAssertNil(appearance.colors.chatBackground)
+        XCTAssertEqual(ChatColors.from(appearance), .lightDefault)
+        let local = ChatColors.resolve(
+            appearance: appearance,
+            override: ChatThemeOverride(chatBackground: "#101010"),
+            colorScheme: .light
+        )
+        XCTAssertEqual(local.background, ChatColors.hex("#101010"))
+        XCTAssertEqual(local.headerBackground, ChatColors.lightDefault.headerBackground)
         XCTAssertFalse(appearance.backgroundImage.enabled)
     }
 

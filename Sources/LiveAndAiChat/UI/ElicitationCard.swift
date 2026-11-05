@@ -158,9 +158,7 @@ struct ElicitationCard: View {
         if let line = ElicitationForm.statusLine(elicitation.status) {
             VStack(alignment: .leading, spacing: 12) {
                 StepPrompt(text: prompt)
-                Text(verbatim: line)
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(colors.receivedTimestamp)
+                StepStatus(text: line, done: elicitation.status == .answered || elicitation.status == .completed)
                 if let url = ElicitationForm.reopenUrl(elicitation) {
                     StepButton(title: "Open secure page", icon: "arrow.up.right.square", primary: true) { _ = onOpen(url) }
                 }
@@ -190,12 +188,12 @@ private struct PendingStep: View {
         let fields = sendable ? ElicitationForm.fields(from: elicitation.requestedSchema) : []
         let url = isForm ? nil : ElicitationForm.secureUrl(elicitation.url)
 
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             StepPrompt(text: prompt)
             if let url {
                 Text(verbatim: "You will finish this step on \(ElicitationForm.hostLabel(url)).")
-                    .font(.caption)
-                    .foregroundColor(colors.receivedTimestamp)
+                    .font(.footnote)
+                    .foregroundColor(colors.systemMessageText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(fields, id: \.key) { field in
@@ -203,7 +201,7 @@ private struct PendingStep: View {
             }
             if failed {
                 Text(verbatim: ElicitationForm.answerError)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundColor(colors.errorColor)
             }
             HStack(spacing: 8) {
@@ -219,7 +217,7 @@ private struct PendingStep: View {
 
     @ViewBuilder
     private func fieldView(_ field: ElicitationField) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             switch field.kind {
             case .toggle:
                 Toggle(isOn: Binding(
@@ -227,10 +225,11 @@ private struct PendingStep: View {
                     set: { toggles[field.key] = $0 }
                 )) {
                     Text(verbatim: field.label)
-                        .font(.caption.weight(.medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundColor(colors.receivedText)
                 }
-                .toggleStyle(SwitchToggleStyle(tint: colors.primary))
+                .toggleStyle(SwitchToggleStyle(tint: colors.sendButtonBg))
+                .frame(minHeight: 44)
             case .choice(let options):
                 label(field)
                 Menu {
@@ -247,7 +246,7 @@ private struct PendingStep: View {
                             .font(.caption2)
                             .foregroundColor(colors.inputPlaceholder)
                     }
-                    .font(.subheadline)
+                    .font(.callout)
                     .modifier(InputFrame(colors: colors))
                 }
                 .accessibilityLabel(Text(verbatim: field.label))
@@ -257,7 +256,7 @@ private struct PendingStep: View {
                     get: { text(field) },
                     set: { texts[field.key] = $0 }
                 ))
-                .font(.subheadline)
+                .font(.callout)
                 .foregroundColor(colors.inputText)
                 .keyboardType(field.kind == .text ? .default : .numbersAndPunctuation)
                 .modifier(InputFrame(colors: colors))
@@ -266,7 +265,7 @@ private struct PendingStep: View {
             if let helper = field.helper {
                 Text(verbatim: helper)
                     .font(.caption)
-                    .foregroundColor(colors.receivedTimestamp)
+                    .foregroundColor(colors.systemMessageText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let problem = problems[field.key] {
@@ -279,7 +278,7 @@ private struct PendingStep: View {
 
     private func label(_ field: ElicitationField) -> some View {
         Text(verbatim: field.label)
-            .font(.caption.weight(.medium))
+            .font(.footnote.weight(.semibold))
             .foregroundColor(colors.receivedText)
             .accessibilityHidden(true)
     }
@@ -333,10 +332,33 @@ private struct StepPrompt: View {
     var body: some View {
         if !text.isEmpty {
             Text(verbatim: text)
-                .font(.body)
+                .font(.callout.weight(.bold))
                 .foregroundColor(colors.receivedText)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
         }
+    }
+}
+
+private struct StepStatus: View {
+    let text: String
+    let done: Bool
+    @Environment(\.chatColors) private var colors
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if done {
+                Image(systemName: "checkmark")
+                    .foregroundColor(colors.successColor)
+                    .accessibilityHidden(true)
+            }
+            Text(verbatim: text)
+                .foregroundColor(colors.receivedText)
+        }
+        .font(.caption.weight(.bold))
+        .padding(.horizontal, 10)
+        .frame(minHeight: 26)
+        .background(Capsule().fill(done ? colors.successTint : colors.receivedBubble))
     }
 }
 
@@ -351,20 +373,16 @@ private struct StepButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let icon { Image(systemName: icon) }
                 Text(verbatim: title)
+                if let icon { Image(systemName: icon) }
             }
-            .font(.footnote.weight(.medium))
+            .font(.callout.weight(primary ? .bold : .semibold))
             .foregroundColor(primary ? colors.sendButtonIcon : colors.receivedText)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 18)
+            .frame(maxWidth: primary ? .infinity : nil, minHeight: 48)
             .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(primary ? colors.sendButtonBg : colors.inputBg)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(primary ? Color.clear : colors.inputBorder, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(primary ? colors.sendButtonBg : colors.receivedBubble)
             )
         }
         .buttonStyle(.plain)
@@ -378,10 +396,10 @@ private struct InputFrame: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(colors.inputBg))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(colors.inputBorder, lineWidth: 1))
+            .padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(colors.inputBg))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(colors.inputBorder, lineWidth: 1))
     }
 }
 

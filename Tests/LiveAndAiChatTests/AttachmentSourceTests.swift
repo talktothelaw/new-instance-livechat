@@ -127,3 +127,58 @@ final class ChatStoreDraftTests: XCTestCase {
         XCTAssertEqual(store.draftText, "")
     }
 }
+
+@MainActor
+final class AttachmentRetryTests: XCTestCase {
+
+    override func tearDown() {
+        URLProtocol.unregisterClass(StubURLProtocol.self)
+        StubURLProtocol.reset()
+        super.tearDown()
+    }
+
+    private func status(_ sdk: LiveAndAiChat, _ id: String) -> AttachmentStatus? {
+        sdk.attachmentQueue.items.first { $0.id == id }?.status
+    }
+
+    private func waitFor(_ expected: AttachmentStatus, _ sdk: LiveAndAiChat, _ id: String) async throws {
+        var tries = 0
+        while status(sdk, id) != expected && tries < 300 {
+            tries += 1
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(status(sdk, id), expected)
+    }
+
+    func testRetryUploadsAFailedItemAgainUnderTheSameId() async throws {
+        var posts = 0
+        StubURLProtocol.reset { request in
+            if request.httpMethod == "PUT" { return (200, Data()) }
+            posts += 1
+            if posts == 1 { return (500, Data()) }
+            return (200, Data(#"{"data":{"requestPresignedUpload":[{"fileId":"f1","uploadUrl":"https://upload.example/f1"}],"confirmFileUpload":{"fileId":"f1","publicUrl":"https://files.example/receipt.png"}}}"#.utf8))
+        }
+        URLProtocol.registerClass(StubURLProtocol.self)
+        let sdk = try LiveAndAiChat.Builder().config(LiveAndAiChatConfig(apiKey: "sk_live_k:secret")).build()
+        defer { sdk.destroy() }
+
+        let id = sdk.attachFile(data: Data(repeating: 7, count: 16), name: "receipt.png", mimeType: "image/png")
+        try await waitFor(.failed, sdk, id)
+        XCTAssertNotNil(sdk.attachmentQueue.items.first?.errorReason)
+
+        sdk.retryAttachment(id: "unknown")
+        sdk.retryAttachment(id: id)
+        let retried = try XCTUnwrap(sdk.attachmentQueue.items.first { $0.id == id })
+        XCTAssertEqual(retried.status, .queued)
+        XCTAssertEqual(retried.progress, 0)
+        XCTAssertNil(retried.errorReason)
+
+        try await waitFor(.uploaded, sdk, id)
+        XCTAssertEqual(sdk.attachmentQueue.items.map(\.id), [id])
+        XCTAssertEqual(sdk.attachmentQueue.items.first?.publicUrl, "https://files.example/receipt.png")
+        XCTAssertEqual(StubURLProtocol.requests.filter { $0.httpMethod == "PUT" }.count, 1)
+
+        sdk.retryAttachment(id: id)
+        XCTAssertEqual(status(sdk, id), .uploaded)
+    }
+}

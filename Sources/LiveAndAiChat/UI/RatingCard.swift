@@ -34,29 +34,39 @@ struct RatingCard: View {
     private var busy: Bool { rating.status == .sending }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if rating.status == .sent {
-                Text(verbatim: RatingCopy.thanks)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundColor(colors.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityAddTraits(.updatesFrequently)
-                    .onAppear { UIAccessibility.post(notification: .announcement, argument: RatingCopy.thanks) }
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(colors.successColor)
+                        .accessibilityHidden(true)
+                    Text(verbatim: RatingCopy.thanks)
+                        .foregroundColor(colors.receivedText)
+                }
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.updatesFrequently)
+                .onAppear { UIAccessibility.post(notification: .announcement, argument: RatingCopy.thanks) }
             } else {
                 Text(verbatim: RatingCopy.title(agentName: rating.agentName))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(colors.text)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(colors.receivedText)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     ForEach(1...5, id: \.self) { value in
                         Button {
                             score = value
                         } label: {
                             Image(systemName: value <= score ? "star.fill" : "star")
-                                .font(.title2)
-                                .foregroundColor(value <= score ? colors.sendButtonBg : colors.textSecondary)
-                                .frame(minWidth: 44, minHeight: 44)
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundColor(value <= score ? colors.warningColor : colors.systemMessageText)
+                                .frame(width: 44, height: 44)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(value == score ? colors.warnTint : Color.clear)
+                                )
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(busy)
@@ -66,12 +76,12 @@ struct RatingCard: View {
                 }
                 if score > 0 {
                     TextField(RatingCopy.placeholder, text: $comment)
-                        .font(.subheadline)
+                        .font(.callout)
                         .foregroundColor(colors.inputText)
-                        .padding(10)
-                        .background(colors.inputBg)
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(colors.inputBorder, lineWidth: 1))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(colors.inputBg))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(colors.inputBorder, lineWidth: 1))
                         .disabled(busy)
                         .onChange(of: comment) { value in
                             if value.count > ChatStore.maxRatingComment {
@@ -86,27 +96,26 @@ struct RatingCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .onAppear { UIAccessibility.post(notification: .announcement, argument: RatingCopy.failure) }
                 }
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     if score > 0 {
                         Button {
                             onSubmit(score, comment)
                         } label: {
                             Text(verbatim: RatingCopy.send)
-                                .font(.subheadline.weight(.semibold))
+                                .font(.subheadline.weight(.bold))
                                 .foregroundColor(colors.sendButtonIcon)
-                                .padding(.horizontal, 18)
-                                .frame(minHeight: 44)
-                                .background(colors.sendButtonBg)
-                                .clipShape(Capsule())
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(colors.sendButtonBg))
                         }
                         .buttonStyle(.plain)
                         .disabled(busy)
+                        .opacity(busy ? 0.6 : 1)
                     }
                     Button(action: onSkip) {
                         Text(verbatim: RatingCopy.skip)
-                            .font(.subheadline)
-                            .foregroundColor(colors.textSecondary)
-                            .padding(.horizontal, 12)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(colors.systemMessageText)
+                            .padding(.horizontal, 18)
                             .frame(minHeight: 44)
                     }
                     .buttonStyle(.plain)
@@ -114,10 +123,18 @@ struct RatingCard: View {
                 }
             }
         }
-        .padding(14)
+        .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(colors.footerContainer)
-        .overlay(alignment: .top) { Rectangle().fill(colors.border).frame(height: 1) }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(colors.background)
+                .shadow(color: Color.black.opacity(0.08), radius: 12, y: 6)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(colors.hairline, lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 12)
+        .background(colors.background)
         .accessibilityElement(children: .contain)
     }
 }

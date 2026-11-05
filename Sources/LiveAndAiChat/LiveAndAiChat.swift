@@ -116,6 +116,7 @@ public final class LiveAndAiChat: ObservableObject {
 
     private let delegates = NSHashTable<AnyObject>.weakObjects()
     private var uploadTasks: [String: Task<Void, Never>] = [:]
+    private var attachmentRequests: [String: AttachmentRequest] = [:]
     private let closeGuard = CloseEmissionGuard()
     private var unreadCancellable: AnyCancellable?
     weak var presentedChatController: AnyObject?
@@ -221,7 +222,10 @@ public final class LiveAndAiChat: ObservableObject {
         guard config.authMode == .apiKey else { return }
         let previousIdentity = currentIdentityKey
         self.user = user
-        if previousIdentity != nil, currentIdentityKey != previousIdentity { store.discardPendingRating() }
+        if previousIdentity != nil, currentIdentityKey != previousIdentity {
+            store.discardPendingRating()
+            attachmentRequests.removeAll()
+        }
         session.customerName = user.customerName
         session.customerEmail = user.customerEmail
         session.customerId = user.customerId
@@ -244,6 +248,7 @@ public final class LiveAndAiChat: ObservableObject {
         stopSubscriptions()
         if identityChanged {
             store.discardPendingRating()
+            attachmentRequests.removeAll()
             session.clear()
             clearConversationState()
         }
@@ -363,6 +368,7 @@ public final class LiveAndAiChat: ObservableObject {
     public func sendMessage(_ content: String) {
         precondition(!destroyed, "SDK has been destroyed")
         let drained = attachmentQueue.drainUploaded()
+        attachmentRequests = attachmentRequests.filter { id, _ in attachmentQueue.items.contains { $0.id == id } }
         let clientId = "c_\(UUID().uuidString)"
         let optimisticId = "temp_\(clientId)"
         #if canImport(UIKit)
@@ -444,7 +450,28 @@ public final class LiveAndAiChat: ObservableObject {
         item.metadata = request.metadata
         attachmentQueue.add(item)
         emitAttachment(item)
-        let itemId = item.id
+        attachmentRequests[item.id] = request
+        startUpload(itemId: item.id, request: request)
+        return item.id
+    }
+
+    public func retryAttachment(id: String) {
+        precondition(!destroyed, "SDK has been destroyed")
+        guard let request = attachmentRequests[id],
+              attachmentQueue.items.first(where: { $0.id == id })?.status == .failed
+        else { return }
+        attachmentQueue.update(id: id) { existing in
+            var copy = existing
+            copy.status = .queued
+            copy.progress = 0
+            copy.errorReason = nil
+            return copy
+        }
+        notifyAttachment(id)
+        startUpload(itemId: id, request: request)
+    }
+
+    private func startUpload(itemId: String, request: AttachmentRequest) {
         let allowRemote = config.allowRemoteAttachmentUrls
         let task = Task { [weak self] in
             guard let self else { return }
@@ -492,6 +519,7 @@ public final class LiveAndAiChat: ObservableObject {
                     }
                     self.notifyAttachment(itemId)
                     self.uploadTasks[itemId] = nil
+                    self.attachmentRequests[itemId] = nil
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -531,7 +559,6 @@ public final class LiveAndAiChat: ObservableObject {
             }
         }
         uploadTasks[itemId] = task
-        return itemId
     }
 
     @MainActor
@@ -547,12 +574,14 @@ public final class LiveAndAiChat: ObservableObject {
     public func removeAttachment(id: String) {
         uploadTasks[id]?.cancel()
         uploadTasks[id] = nil
+        attachmentRequests[id] = nil
         attachmentQueue.remove(id: id)
     }
 
     public func clearAttachments() {
         for (_, task) in uploadTasks { task.cancel() }
         uploadTasks.removeAll()
+        attachmentRequests.removeAll()
         attachmentQueue.clear()
     }
 
@@ -668,6 +697,7 @@ public final class LiveAndAiChat: ObservableObject {
         #endif
         for (_, task) in uploadTasks { task.cancel() }
         uploadTasks.removeAll()
+        attachmentRequests.removeAll()
         destroyed = true
         opened = false
         initTask?.cancel()

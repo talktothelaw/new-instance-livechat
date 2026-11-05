@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Redesigned chat screen. Every color still comes from the merchant's appearance settings. The header now draws a gradient from the Header Background color: a lighter glow in the top-right corner and a deeper tone in the bottom-left, derived the same way on iOS, Android and web, so the look holds for any color, including white and black.
+- With no messages yet, the header grows into a welcome hero with the title, `welcomeMessage` and the status line.
+- Messages show an assistant or agent avatar, day separators, and sent, delivered and read ticks inside the sent bubble. The waiting card shows `Position in queue: N` and `Estimated wait: N min` when the server sends them.
+- New look for the composer, upload chips, rating card, form steps, typing indicator and scroll-to-bottom button.
+- The chat background image from the merchant's appearance settings now draws behind the message list when it is turned on, with its opacity, size (`cover`, `contain` or `auto`), position, repeat, overlay color and overlay opacity, matching the web widget. Only `https` and `http` links load. If the image cannot load, the chat keeps its Chat Background color.
+- New `retryAttachment(id:)` uploads a failed attachment again under the same id. Unknown ids and attachments that have not failed are ignored. A failed upload chip now has a Retry button next to Remove and keeps showing the file name, and removing an attachment from its chip also cancels its upload.
+- A customer message with only attachments now shows its time and ticks inside a sent bubble, like a text message.
+- The company name and agent names keep the casing the merchant typed. Only first letters are capitalized, so "NewInstance" no longer shows as "Newinstance".
+- The scroll-to-bottom button now appears with the unread count when new messages arrive while the customer is scrolled up, and tapping it jumps to the latest message. New messages no longer pull a customer who is reading older messages back to the bottom.
+- Fixed `SerializationTests.testAppearanceDecodesWithMissingFields`. Since 0.3.0 the decoder leaves appearance colors the server did not send empty, so the app's local theme can fill them, the same as Android and web. The test expected filled-in colors and now checks that behavior.
+
 ## 0.6.0
 
 - Chat rating. When the merchant turns on `Ask customers to rate`, a card above the composer asks `How was your chat with {agent name}?` (or `How was your chat?`) after a chat is resolved or closed and the customer wrote at least one message. It has five stars (VoiceOver: `1 star` to `5 stars`), an optional comment up to 1000 characters, `Send` and `Skip`, then `Thanks for your feedback.` for about 2 seconds. A failed send shows `Could not send your rating. Try again.` and keeps the card; a server refusal with code `RATING_NOT_ALLOWED` removes it silently, and a refusal because ratings were switched off stops the card for later chats until the configuration is loaded again. The composer is never disabled and the card works in the iPad panel.
