@@ -19,6 +19,7 @@ struct Composer: View {
     let enabled: Bool
     let onPickFile: () -> Void
     let onRemoveAttachment: (String) -> Void
+    let onRetryAttachment: (String) -> Void
     let onSend: (String) -> Void
     let onTyping: (Bool) -> Void
     @Binding var text: String
@@ -41,23 +42,22 @@ struct Composer: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-                .background(colors.border)
+        VStack(spacing: 8) {
             if !pendingAttachments.isEmpty {
                 AttachmentChipStrip(
                     items: pendingAttachments,
-                    onRemove: onRemoveAttachment
+                    onRemove: onRemoveAttachment,
+                    onRetry: onRetryAttachment
                 )
-                .environment(\.chatColors, colors)
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 2) {
                 if attachmentsAllowed {
                     Button(action: onPickFile) {
                         Image(systemName: "paperclip")
-                            .font(.system(size: 18))
+                            .font(.system(size: 18, weight: .medium))
                             .foregroundColor(colors.attachmentButton)
-                            .frame(width: 36, height: 36)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .disabled(!enabled)
@@ -68,16 +68,16 @@ struct Composer: View {
                     if text.isEmpty {
                         Text(placeholderText)
                             .foregroundColor(colors.inputPlaceholder)
-                            .font(.body)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 9)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .padding(.horizontal, 5)
+                            .padding(.top, 12)
                             .allowsHitTesting(false)
                     }
                     TextEditor(text: $text)
-                        .font(.body)
+                        .font(.callout)
                         .foregroundColor(colors.inputText)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
+                        .padding(.top, 4)
                         .scrollContentBackgroundHiddenIfAvailable()
                         .background(Color.clear)
                         .onChange(of: text) { newValue in
@@ -85,14 +85,7 @@ struct Composer: View {
                         }
                 }
                 .frame(height: composerInputHeight)
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(colors.inputBg)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18)
-                        .stroke(colors.inputBorder, lineWidth: 1)
-                )
+                .padding(.leading, attachmentsAllowed ? 0 : 10)
 
                 Button(action: sendTapped) {
                     Group {
@@ -101,22 +94,25 @@ struct Composer: View {
                                 .progressViewStyle(CircularProgressViewStyle(tint: colors.sendButtonIcon))
                         } else {
                             Image(systemName: "arrow.up")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(.system(size: 17, weight: .bold))
                                 .foregroundColor(colors.sendButtonIcon)
                         }
                     }
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle().fill(canSend ? colors.sendButtonBg : colors.sendButtonBg.opacity(0.4))
-                    )
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(colors.sendButtonBg))
+                    .opacity(canSend ? 1 : 0.45)
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
                 .accessibilityLabel(isUploading ? "Uploading" : "Send")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(4)
+            .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(colors.inputBg))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(colors.inputBorder, lineWidth: 1))
         }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         // Only ignore the container safe area (home-indicator gutter)
         // — NOT the keyboard. Plain `.ignoresSafeArea(edges: .bottom)`
         // can swallow the keyboard inset on some iOS versions, leaving
@@ -125,6 +121,7 @@ struct Composer: View {
         // chrome only, so the composer auto-avoids the keyboard
         // cleanly.
         .background(colors.footerContainer.ignoresSafeArea(.container, edges: .bottom))
+        .overlay(Rectangle().fill(colors.hairline).frame(height: 1), alignment: .top)
     }
 
     /// Compose-time height for the input rounded rect. Matches the web's
@@ -134,9 +131,9 @@ struct Composer: View {
     /// scrolls internally.
     private var composerInputHeight: CGFloat {
         let newlineCount = text.reduce(into: 0) { $0 += $1 == "\n" ? 1 : 0 }
-        // 36 = single line; grow ~18pt per newline up to 120.
-        let raw = 36 + CGFloat(newlineCount) * 18
-        return min(max(raw, 36), 120)
+        // 44 = single line; grow ~21pt per newline up to 120.
+        let raw = 44 + CGFloat(newlineCount) * 21
+        return min(max(raw, 44), 120)
     }
 
     private func handleTextChange(_ newValue: String) {
@@ -169,109 +166,102 @@ struct Composer: View {
     }
 }
 
-/// Horizontally scrolling row of 56×56 thumb chips — one per queued
-/// attachment. Mirrors the web SDK's `DraggableStrip` layout (px-3 pt-2
-/// pb-1, gap-2). Hidden scrollbar; native swipe scroll.
+/// Horizontally scrolling row of upload chips, one per queued
+/// attachment. Hidden scrollbar; native swipe scroll.
 struct AttachmentChipStrip: View {
     let items: [QueuedAttachment]
     let onRemove: (String) -> Void
+    let onRetry: (String) -> Void
     @Environment(\.chatColors) private var colors
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: 6) {
                 ForEach(items) { item in
-                    AttachmentChip(item: item, onRemove: onRemove)
-                        .environment(\.chatColors, colors)
+                    AttachmentChip(item: item, onRemove: onRemove, onRetry: onRetry)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
         }
-        .background(colors.footerContainer)
     }
 }
 
-/// 56×56 square thumb with floating remove button and a two-line
-/// label/status caption underneath. Matches the web SDK's
-/// AttachmentChip vertical layout (image-grid friendly even with many
-/// items queued).
 struct AttachmentChip: View {
     let item: QueuedAttachment
     let onRemove: (String) -> Void
+    let onRetry: (String) -> Void
     @Environment(\.chatColors) private var colors
 
-    var body: some View {
-        VStack(spacing: 4) {
-            thumbContainer
-            Text(displayName)
-                .font(.caption2)
-                .foregroundColor(item.status == .failed ? colors.errorColor : colors.textSecondary)
-                .lineLimit(1)
-                .frame(width: 64)
-            Text(subline)
-                .font(.caption2)
-                .foregroundColor(colors.textSecondary.opacity(0.7))
-                .lineLimit(1)
-                .frame(width: 64)
-        }
-        .frame(width: 64)
-    }
+    private var inFlight: Bool { item.status == .uploading || item.status == .queued }
+    private var failed: Bool { item.status == .failed }
 
-    private var thumbContainer: some View {
-        ZStack(alignment: .topTrailing) {
+    var body: some View {
+        HStack(spacing: 8) {
             ZStack {
-                colors.inputBg
-                content
-                if item.status == .uploading || item.status == .queued {
-                    Color.black.opacity(0.30)
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(0.85)
-                    GeometryReader { geo in
-                        VStack(spacing: 0) {
-                            Spacer()
-                            HStack(spacing: 0) {
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.85))
-                                    .frame(width: max(0, geo.size.width * CGFloat(progressFraction)), height: 3)
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.20))
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 3)
-                            }
-                        }
-                    }
-                }
-                if item.status == .failed {
-                    Color(red: 0.94, green: 0.27, blue: 0.27).opacity(0.20)
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 18, weight: .semibold))
+                colors.background
+                if failed {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(colors.errorColor)
+                } else {
+                    content
                 }
             }
-            .frame(width: 56, height: 56)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(item.status == .failed ? colors.errorColor : Color.clear, lineWidth: 1)
-            )
-
-            if item.status != .uploading && item.status != .queued {
-                Button { onRemove(item.id) } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundColor(colors.textSecondary)
-                        .frame(width: 18, height: 18)
-                        .background(Circle().fill(colors.background))
-                        .overlay(Circle().stroke(colors.border, lineWidth: 1))
+            .frame(width: 28, height: 28)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(failed ? colors.errorColor : colors.receivedText)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if inFlight {
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(colors.hairline)
+                            Capsule()
+                                .fill(colors.sendButtonBg)
+                                .frame(width: 40 * CGFloat(progressFraction))
+                        }
+                        .frame(width: 40, height: 4)
+                        .accessibilityHidden(true)
+                    }
+                    Text(subline)
+                        .font(.caption2)
+                        .foregroundColor(colors.systemMessageText)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: 140, alignment: .leading)
+            if failed {
+                Button { onRetry(item.id) } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(colors.errorColor)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .offset(x: 6, y: -6)
+                .accessibilityLabel("Retry")
+            }
+            if !inFlight {
+                Button { onRemove(item.id) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(colors.systemMessageText)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
                 .accessibilityLabel("Remove attachment")
             }
         }
+        .padding(.leading, 6)
+        .padding(.trailing, inFlight ? 10 : 2)
+        .frame(height: 44)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(failed ? colors.errorTint : colors.receivedBubble))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(failed ? colors.errorColor : colors.hairline, lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -281,13 +271,13 @@ struct AttachmentChip: View {
                 preview
             } else {
                 Image(systemName: "photo")
-                    .font(.system(size: 22))
-                    .foregroundColor(colors.textSecondary)
+                    .font(.system(size: 13))
+                    .foregroundColor(colors.systemMessageText)
             }
         } else {
             Image(systemName: "doc.fill")
-                .font(.system(size: 22))
-                .foregroundColor(colors.textSecondary)
+                .font(.system(size: 13))
+                .foregroundColor(colors.systemMessageText)
         }
     }
 
@@ -302,7 +292,6 @@ struct AttachmentChip: View {
     }
 
     private var displayName: String {
-        if item.status == .failed { return "Failed" }
         let max = 12
         if item.name.count <= max { return item.name }
         let ns = item.name as NSString

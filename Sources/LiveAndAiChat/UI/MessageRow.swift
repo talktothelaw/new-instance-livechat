@@ -16,11 +16,10 @@ struct MessageRow: View {
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        // System messages render as centered italic text with no bubble,
-        // no sender label, no timestamp — matches the web SDK exactly.
+        // System messages render as centered text between hairlines with
+        // no bubble, no sender label, no timestamp.
         if message.type == .system {
             SystemMessageRow(content: message.content)
-                .environment(\.chatColors, colors)
         } else if let step = message.elicitation {
             stepBody(step)
         } else {
@@ -29,80 +28,106 @@ struct MessageRow: View {
     }
 
     private func stepBody(_ step: Elicitation) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let label = senderLabel {
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(colors.textSecondary)
-                    .padding(.leading, 4)
-            }
-            VStack(alignment: .trailing, spacing: 6) {
+        HStack(alignment: .top, spacing: 8) {
+            MessageAvatar(type: message.type, name: senderLabel ?? "")
+            VStack(alignment: .leading, spacing: 4) {
+                if let line = senderLine {
+                    SenderLine(text: line)
+                }
                 ElicitationCard(
                     prompt: message.content,
                     elicitation: step,
                     onAnswer: { action, content in try await onAnswer(message.id, action, content) },
                     onOpen: onOpenStep
                 )
+                .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                BubbleFooter(message: message, isCustomer: false)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(colors.background)
+                        .shadow(color: Color.black.opacity(0.12), radius: 14, y: 8)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(colors.hairline, lineWidth: 1))
             }
-            .frame(maxWidth: 280)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(RoundedCorners(tl: 16, tr: 16, bl: 4, br: 16).fill(colors.receivedBubble))
-            .environment(\.chatColors, colors)
+            .frame(maxWidth: 320, alignment: .leading)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
     private var chatMessageBody: some View {
         let isCustomer = message.type == .customer
         let hasContent = !message.content.isEmpty
         let hasAttachments = !message.attachments.isEmpty
-        let isFailed = message.status == .failed
 
-        return VStack(alignment: isCustomer ? .trailing : .leading, spacing: 4) {
-            if !isCustomer, let label = senderLabel {
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(colors.textSecondary)
-                    .padding(.leading, 4)
-                    .accessibilityHidden(true)  // rolled into the bubble's label
-            }
-            if hasContent {
-                TextBubble(message: message, isCustomer: isCustomer)
-                    .environment(\.chatColors, colors)
-            }
-            if hasAttachments {
-                AttachmentsBlock(
-                    attachments: message.attachments,
-                    isCustomer: isCustomer,
-                    topPadding: hasContent ? 6 : 0,
-                    onImageTap: onImageTap,
-                    onImageLoaded: onImageLoaded
-                )
-                .environment(\.chatColors, colors)
-            }
-            if isFailed {
-                Button { onRetry(message.id) } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption2)
-                        Text("Failed · tap to retry")
-                            .font(.caption2)
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption2)
+        if isCustomer {
+            VStack(alignment: .trailing, spacing: 4) {
+                if hasContent {
+                    TextBubble(message: message, isCustomer: true)
+                    if hasAttachments {
+                        attachmentsBlock(isCustomer: true, hasContent: true)
                     }
-                    .foregroundColor(colors.errorColor)
+                } else if hasAttachments {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        attachmentsBlock(isCustomer: true, hasContent: false)
+                        SentFooter(message: message)
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 4)
+                    }
+                    .padding(4)
+                    .background(RoundedCorners(tl: 18, tr: 18, bl: 18, br: 6).fill(colors.sentBubble))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Message failed to send")
-                .accessibilityHint("Double-tap to retry")
+                if message.status == .failed {
+                    Button { onRetry(message.id) } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                            Text("Failed · tap to retry")
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(colors.errorColor)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Message failed to send")
+                    .accessibilityHint("Double-tap to retry")
+                }
             }
+            .padding(.leading, 48)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilitySummary)
+        } else {
+            HStack(alignment: .bottom, spacing: 8) {
+                MessageAvatar(type: message.type, name: senderLabel ?? "")
+                VStack(alignment: .leading, spacing: 4) {
+                    if let line = senderLine {
+                        SenderLine(text: line)
+                            .accessibilityHidden(true)  // rolled into the bubble's label
+                    }
+                    if hasContent {
+                        TextBubble(message: message, isCustomer: false)
+                    }
+                    if hasAttachments {
+                        attachmentsBlock(isCustomer: false, hasContent: hasContent)
+                    }
+                }
+                Spacer(minLength: 24)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilitySummary)
         }
-        .frame(maxWidth: .infinity, alignment: isCustomer ? .trailing : .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilitySummary)
+    }
+
+    private func attachmentsBlock(isCustomer: Bool, hasContent: Bool) -> some View {
+        AttachmentsBlock(
+            attachments: message.attachments,
+            isCustomer: isCustomer,
+            topPadding: hasContent ? 2 : 0,
+            onImageTap: onImageTap,
+            onImageLoaded: onImageLoaded
+        )
     }
 
     /// Single VoiceOver utterance per message row. Combines sender,
@@ -152,28 +177,84 @@ struct MessageRow: View {
         case .system, .customer: return nil
         }
     }
+
+    private var senderLine: String? {
+        guard let label = senderLabel else { return nil }
+        guard let ts = MessageRowHelpers.formatTimestamp(message.createdAt) else { return label }
+        return "\(label) · \(ts)"
+    }
 }
 
-/// Centered italic system notice rendered inline with the message
-/// stream. No bubble, no sender label, no timestamp — matches the web
-/// SDK's `MessageBubble` SYSTEM branch.
+private struct SenderLine: View {
+    let text: String
+    @Environment(\.chatColors) private var colors
+
+    var body: some View {
+        Text(verbatim: text)
+            .font(.caption.weight(.semibold))
+            .foregroundColor(colors.receivedTimestamp)
+            .lineLimit(1)
+    }
+}
+
+struct MessageAvatar: View {
+    let type: MessageType
+    let name: String
+    @Environment(\.chatColors) private var colors
+
+    var body: some View {
+        Group {
+            if type == .ai {
+                let points = HeaderBackdrop.gradientPoints(width: 28, height: 28)
+                Image(systemName: "sparkle")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(colors.headerPrimaryText)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 28 * 0.22, style: .continuous)
+                            .fill(LinearGradient(
+                                gradient: Gradient(colors: [colors.headerStops.glow, colors.headerBackground]),
+                                startPoint: points.start,
+                                endPoint: points.end
+                            ))
+                    )
+            } else {
+                Text(verbatim: MessageRowHelpers.initials(name))
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(colors.receivedText)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(colors.agentAvatar))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// Centered system notice rendered inline with the message stream
+/// between two hairlines. No bubble, no sender label, no timestamp.
 private struct SystemMessageRow: View {
     let content: String
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        HStack {
-            Spacer(minLength: 0)
+        HStack(spacing: 10) {
+            hairline
             Text(content)
                 .font(.footnote)
-                .italic()
                 .foregroundColor(colors.systemMessageText)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 4)
-            Spacer(minLength: 0)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+            hairline
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var hairline: some View {
+        Rectangle()
+            .fill(colors.hairline)
+            .frame(minWidth: 16, maxWidth: .infinity)
+            .frame(height: 1)
     }
 }
 
@@ -185,66 +266,39 @@ private struct TextBubble: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
             Text(message.content)
-                .font(.body)
-                .foregroundColor(foregroundColor)
-                .frame(maxWidth: 280, alignment: .leading)
+                .font(.callout)
+                .foregroundColor(isCustomer ? colors.sentText : colors.receivedText)
                 .fixedSize(horizontal: false, vertical: true)
-            BubbleFooter(message: message, isCustomer: isCustomer)
-                .environment(\.chatColors, colors)
+            if isCustomer {
+                SentFooter(message: message)
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(bubbleShape.fill(backgroundColor))
-    }
-
-    private var backgroundColor: Color {
-        switch message.type {
-        case .customer: return colors.sentBubble
-        case .agent, .ai, .system: return colors.receivedBubble
-        }
-    }
-
-    private var foregroundColor: Color {
-        switch message.type {
-        case .customer: return colors.sentText
-        case .agent, .ai: return colors.receivedText
-        case .system: return colors.systemMessageText
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(bubbleShape.fill(isCustomer ? colors.sentBubble : colors.receivedBubble))
+        .frame(maxWidth: 280, alignment: isCustomer ? .trailing : .leading)
     }
 
     private var bubbleShape: RoundedCorners {
         isCustomer
-            ? RoundedCorners(tl: 16, tr: 16, bl: 16, br: 4)
-            : RoundedCorners(tl: 16, tr: 16, bl: 4, br: 16)
+            ? RoundedCorners(tl: 18, tr: 18, bl: 18, br: 6)
+            : RoundedCorners(tl: 18, tr: 18, bl: 6, br: 18)
     }
 }
 
-/// Timestamp + status checkmark row that lives inside the bubble's bottom-right
-/// — matches WhatsApp / web SDK / Android. System messages don't render either.
-private struct BubbleFooter: View {
+private struct SentFooter: View {
     let message: ChatMessage
-    let isCustomer: Bool
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        if message.type == .system {
-            EmptyView()
-        } else {
-            HStack(spacing: 4) {
-                if let ts = MessageRowHelpers.formatTimestamp(message.createdAt) {
-                    Text(ts)
-                        .font(.caption2)
-                        .foregroundColor(timestampColor)
-                }
-                if isCustomer {
-                    statusIcon
-                }
+        HStack(spacing: 4) {
+            if let ts = MessageRowHelpers.formatTimestamp(message.createdAt) {
+                Text(ts)
+                    .font(.caption2)
             }
+            statusIcon
         }
-    }
-
-    private var timestampColor: Color {
-        isCustomer ? colors.sentTimestamp : colors.receivedTimestamp
+        .foregroundColor(colors.sentTimestamp)
     }
 
     @ViewBuilder
@@ -253,20 +307,37 @@ private struct BubbleFooter: View {
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.caption2)
-                .foregroundColor(colors.errorColor)
         case .sent:
-            Image(systemName: "checkmark")
-                .font(.caption2.weight(.semibold))
-                .foregroundColor(timestampColor)
+            tick(double: false)
         case .delivered:
-            Image(systemName: "checkmark.circle")
-                .font(.caption2.weight(.semibold))
-                .foregroundColor(timestampColor)
+            tick(double: true)
+                .opacity(0.6)
         case .read:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundColor(colors.successColor)
+            tick(double: true)
         }
+    }
+
+    private func tick(double: Bool) -> some View {
+        TickShape(double: double)
+            .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            .frame(width: 14, height: 14)
+    }
+}
+
+struct TickShape: Shape {
+    let double: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let k = min(rect.width, rect.height) / 24
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * k, y: rect.minY + y * k) }
+        var path = Path()
+        if double {
+            path.move(to: p(18, 6)); path.addLine(to: p(7, 17)); path.addLine(to: p(2, 12))
+            path.move(to: p(22, 10)); path.addLine(to: p(14.5, 17.5)); path.addLine(to: p(13, 16))
+        } else {
+            path.move(to: p(20, 6)); path.addLine(to: p(9, 17)); path.addLine(to: p(4, 12))
+        }
+        return path
     }
 }
 
@@ -325,7 +396,7 @@ struct AttachmentsBlock: View {
 
     var body: some View {
         let split = MessageRowHelpers.splitAttachments(attachments)
-        VStack(alignment: isCustomer ? .trailing : .leading, spacing: 6) {
+        VStack(alignment: isCustomer ? .trailing : .leading, spacing: 4) {
             if !split.images.isEmpty {
                 ImageGrid(
                     images: split.images,
@@ -333,11 +404,9 @@ struct AttachmentsBlock: View {
                     onImageTap: onImageTap,
                     onImageLoaded: onImageLoaded
                 )
-                .environment(\.chatColors, colors)
             }
             ForEach(split.files, id: \.url) { att in
                 FileAttachmentRow(attachment: att, isCustomer: isCustomer)
-                    .environment(\.chatColors, colors)
             }
         }
         .padding(.top, topPadding)
@@ -351,10 +420,6 @@ struct ImageGrid: View {
     let onImageLoaded: () -> Void
     @Environment(\.chatColors) private var colors
 
-    private var frameBg: Color {
-        isCustomer ? colors.sentBubble.opacity(0.15) : colors.receivedBubble
-    }
-
     var body: some View {
         Group {
             if images.count == 1 {
@@ -363,13 +428,12 @@ struct ImageGrid: View {
                 tiledGrid
             }
         }
-        .padding(6)
-        .background(RoundedCorners(tl: 16, tr: 16, bl: 16, br: 16).fill(frameBg))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var singleImage: some View {
         ImageBubble(attachment: images[0], onTap: onImageTap, onLoaded: onImageLoaded)
-            .frame(maxWidth: 280)
+            .frame(maxWidth: 260)
     }
 
     private var tiledGrid: some View {
@@ -378,7 +442,7 @@ struct ImageGrid: View {
         let indexed: [(offset: Int, element: MessageAttachment)] =
             visible.enumerated().map { ($0.offset, $0.element) }
         let rows: [[(offset: Int, element: MessageAttachment)]] = indexed.chunked(into: 2)
-        return VStack(spacing: 3) {
+        return VStack(alignment: .leading, spacing: 4) {
             ForEach(rows, id: \.first!.offset) { row in
                 tileRow(row: row, lastVisibleIndex: visible.count - 1, overflow: overflow)
             }
@@ -390,7 +454,7 @@ struct ImageGrid: View {
         lastVisibleIndex: Int,
         overflow: Int
     ) -> some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             ForEach(row, id: \.element.url) { item in
                 tile(
                     attachment: item.element,
@@ -410,10 +474,11 @@ struct ImageGrid: View {
             ImageBubble(
                 attachment: attachment,
                 cropToSquare: true,
+                cornerRadius: 4,
                 onTap: onImageTap,
                 onLoaded: onImageLoaded
             )
-            .frame(width: 110, height: 110)
+            .frame(width: 116, height: 116)
             if showOverflow {
                 Color.black.opacity(0.55)
                 Text("+\(overflow)")
@@ -421,13 +486,15 @@ struct ImageGrid: View {
                     .foregroundColor(.white)
             }
         }
-        .clipShape(RoundedCorners(tl: 8, tr: 8, bl: 8, br: 8))
+        .frame(width: 116, height: 116)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 }
 
 struct ImageBubble: View {
     let attachment: MessageAttachment
     var cropToSquare: Bool = false
+    var cornerRadius: CGFloat = 14
     let onTap: (MessageAttachment) -> Void
     let onLoaded: () -> Void
     @Environment(\.chatColors) private var colors
@@ -440,8 +507,8 @@ struct ImageBubble: View {
                 minHeight: cropToSquare ? nil : 100,
                 maxHeight: cropToSquare ? nil : 360
             )
-            .background(colors.background)
-            .clipShape(RoundedCorners(tl: 12, tr: 12, bl: 12, br: 12))
+            .background(colors.receivedBubble)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture { onTap(attachment) }
             .accessibilityElement(children: .ignore)
@@ -469,12 +536,11 @@ struct ImageBubble: View {
 
     private var loadingPlaceholder: some View {
         ZStack {
-            colors.typingBg
+            colors.receivedBubble
             ProgressView()
-                .progressViewStyle(.circular)
-                .foregroundColor(colors.textSecondary)
+                .progressViewStyle(CircularProgressViewStyle(tint: colors.systemMessageText))
         }
-        .frame(width: cropToSquare ? 110 : 220, height: cropToSquare ? 110 : 165)
+        .frame(width: cropToSquare ? 116 : 220, height: cropToSquare ? 116 : 165)
     }
 
 }
@@ -489,45 +555,41 @@ struct FileAttachmentRow: View {
             || attachment.name.lowercased().hasSuffix(".pdf")
     }
 
-    private var pillBg: Color {
-        isCustomer ? colors.sentBubble.opacity(0.15) : colors.border
+    private var cardBg: Color {
+        isCustomer ? colors.sentBubble : colors.receivedBubble
     }
 
-    private var pillText: Color {
-        isCustomer ? colors.sentText : colors.text
+    private var cardText: Color {
+        isCustomer ? colors.sentText : colors.receivedText
     }
 
     var body: some View {
         HStack(spacing: 10) {
-            if isPdf {
-                Image(systemName: "doc.richtext.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(colors.errorColor)
-            } else {
-                Image(systemName: "doc.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(pillText)
-            }
-            VStack(alignment: .leading, spacing: 0) {
+            Image(systemName: isPdf ? "doc.richtext.fill" : "doc.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(cardText)
+                .frame(width: 36, height: 36)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(ChatColors.mix(cardText, cardBg, 0.16)))
+            VStack(alignment: .leading, spacing: 1) {
                 Text(attachment.name)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundColor(pillText)
+                    .font(.footnote.weight(.bold))
+                    .foregroundColor(cardText)
                     .lineLimit(1)
-                if attachment.size > 0 {
-                    Text(MessageRowHelpers.formatBytes(attachment.size))
+                    .truncationMode(.middle)
+                if let detail = MessageRowHelpers.fileDetail(attachment) {
+                    Text(verbatim: detail)
                         .font(.caption2)
-                        .foregroundColor(pillText.opacity(0.7))
+                        .foregroundColor(cardText.opacity(0.85))
+                        .lineLimit(1)
                 }
             }
-            Spacer()
-            Image(systemName: "eye")
-                .font(.system(size: 14))
-                .foregroundColor(pillText.opacity(0.7))
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: 280)
-        .background(RoundedCorners(tl: 10, tr: 10, bl: 10, br: 10).fill(pillBg))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 260)
+        .background(fileShape.fill(cardBg))
+        .contentShape(Rectangle())
         .onTapGesture {
             if let url = URL(string: attachment.url) {
                 UIApplication.shared.open(url)
@@ -537,6 +599,12 @@ struct FileAttachmentRow: View {
         .accessibilityLabel("\(isPdf ? "PDF" : "File"): \(attachment.name)" + (attachment.size > 0 ? ", \(MessageRowHelpers.formatBytes(attachment.size))" : ""))
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Double-tap to open")
+    }
+
+    private var fileShape: RoundedCorners {
+        isCustomer
+            ? RoundedCorners(tl: 14, tr: 14, bl: 14, br: 6)
+            : RoundedCorners(tl: 14, tr: 14, bl: 6, br: 14)
     }
 }
 
@@ -559,6 +627,19 @@ enum MessageRowHelpers {
         if att.type.lowercased().hasPrefix("image/") { return true }
         let ext = (att.name as NSString).pathExtension.lowercased()
         return ["png", "jpg", "jpeg", "webp", "gif"].contains(ext)
+    }
+
+    static func fileDetail(_ att: MessageAttachment) -> String? {
+        let ext = (att.name as NSString).pathExtension.uppercased()
+        var parts: [String] = []
+        if !ext.isEmpty { parts.append(ext) }
+        if att.size > 0 { parts.append(formatBytes(att.size)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    static func initials(_ name: String) -> String {
+        let words = name.split(whereSeparator: { $0.isWhitespace }).prefix(2)
+        return words.compactMap { $0.first.map { String($0).uppercased() } }.joined()
     }
 
     static func formatBytes(_ bytes: Int64) -> String {
@@ -639,14 +720,13 @@ struct DaySeparator: View {
         HStack {
             Spacer()
             Text(label)
-                .font(.caption2.weight(.medium))
+                .font(.caption.weight(.semibold))
                 .foregroundColor(colors.daySeparatorText)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.vertical, 3)
                 .background(Capsule().fill(colors.daySeparatorBg))
             Spacer()
         }
-        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Messages from \(label)")
     }

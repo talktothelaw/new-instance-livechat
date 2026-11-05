@@ -1,3 +1,20 @@
+import Foundation
+
+enum WaitingCopy {
+    static let title = "Waiting for an agent…"
+
+    static func detail(queuePosition: Int?, estimatedWaitSeconds: Int?) -> String? {
+        var parts: [String] = []
+        if let position = queuePosition, position > 0 {
+            parts.append("Position in queue: \(position)")
+        }
+        if let seconds = estimatedWaitSeconds, seconds >= 0 {
+            parts.append("Estimated wait: \(max(1, (seconds + 59) / 60)) min")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
 #if canImport(UIKit)
 import SwiftUI
 import Combine
@@ -24,6 +41,7 @@ public struct ChatScreen: View {
 
     @State private var viewerAttachment: MessageAttachment?
     @Environment(\.colorScheme) private var systemColorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
         sdk: LiveAndAiChat,
@@ -52,6 +70,7 @@ public struct ChatScreen: View {
         let logoUrl = sdk.orgConfig?.branding.logoUrl
         let showOnlineStatus = sdk.orgConfig?.widget.showOnlineStatus ?? true
         let canRequestHandoff = store.flowState == .botConversation && sdk.lifecycle == .ready
+        let hero = sdk.lifecycle == .ready && store.messages.isEmpty
         let subtitleIcon: HeaderSubtitleIcon = {
             switch store.flowState {
             case .botConversation: return .bot
@@ -69,29 +88,37 @@ public struct ChatScreen: View {
                 showOnlineStatus: showOnlineStatus,
                 isOnline: sdk.connectionState == .connected,
                 showHandoffButton: canRequestHandoff,
+                hero: hero,
+                welcomeMessage: sdk.orgConfig?.settings.welcomeMessage ?? "",
                 onRequestHandoff: { sdk.requestHandoff(reason: "user_requested") },
                 onClose: onClose
             )
-            .environment(\.chatColors, colors)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: hero)
 
             switch sdk.connectionState {
             case .offline:
                 ConnectionBanner(
                     text: sdk.orgConfig?.settings.offlineMessage.isEmpty == false
                         ? sdk.orgConfig!.settings.offlineMessage
-                        : "You appear to be offline"
+                        : "You appear to be offline",
+                    iconName: "wifi.slash"
                 )
-                .environment(\.chatColors, colors)
             case .disconnected:
-                ConnectionBanner(text: "Reconnecting…")
-                    .environment(\.chatColors, colors)
+                ConnectionBanner(text: "Reconnecting…", iconName: "arrow.triangle.2.circlepath")
             default:
                 EmptyView()
             }
 
+            if store.flowState == .handoffPending && sdk.lifecycle == .ready {
+                WaitingCard(
+                    queuePosition: store.assignment?.queuePosition,
+                    estimatedWaitSeconds: store.assignment?.estimatedWaitTime
+                )
+            }
+
             ZStack {
                 colors.background
-                body(for: sdk.lifecycle, colors: colors, typingAllowed: typingAllowed)
+                body(for: sdk.lifecycle, typingAllowed: typingAllowed)
             }
             .frame(maxHeight: .infinity)
 
@@ -102,7 +129,6 @@ public struct ChatScreen: View {
                     onSkip: { sdk.skipRating() }
                 )
                 .id(rating.conversationId)
-                .environment(\.chatColors, colors)
             }
 
             Composer(
@@ -120,7 +146,8 @@ public struct ChatScreen: View {
                     || sdk.lifecycle == .notStarted
                     || store.flowState == .ended,
                 onPickFile: onPickFile,
-                onRemoveAttachment: { attachmentQueue.remove(id: $0) },
+                onRemoveAttachment: { sdk.removeAttachment(id: $0) },
+                onRetryAttachment: { sdk.retryAttachment(id: $0) },
                 onSend: { sdk.sendMessage($0) },
                 onTyping: { typing in
                     if typing { sdk.sendTypingStart() } else { sdk.sendTypingStop() }
@@ -130,8 +157,8 @@ public struct ChatScreen: View {
                     set: { sdk.updateDraft($0) }
                 )
             )
-            .environment(\.chatColors, colors)
         }
+        .environment(\.chatColors, colors)
         // Clamp to a readable column width on iPad / landscape / wide
         // splits (≤ 640pt). On iPhone portrait this is a no-op because
         // the screen is already narrower. The outer HStack centres the
@@ -143,19 +170,18 @@ public struct ChatScreen: View {
         .background(colors.background.ignoresSafeArea(.container, edges: .bottom))
         .fullScreenCover(item: $viewerAttachment) { att in
             ImageViewerView(attachment: att, onClose: { viewerAttachment = nil })
+                .environment(\.chatColors, colors)
         }
     }
 
     @ViewBuilder
     private func body(
         for lifecycle: ChatSdkLifecycle,
-        colors: ChatColors,
         typingAllowed: Bool
     ) -> some View {
         switch lifecycle {
         case .initializing, .notStarted:
             ConnectingPlaceholder(text: "Connecting to chat service…")
-                .environment(\.chatColors, colors)
         case .unavailable:
             SystemNoticeBlock(
                 text: "Chat is currently unavailable",
@@ -163,7 +189,6 @@ public struct ChatScreen: View {
                 actionLabel: nil,
                 onAction: nil
             )
-            .environment(\.chatColors, colors)
         case .failed:
             SystemNoticeBlock(
                 text: "Could not start chat. Check your connection and try again.",
@@ -171,33 +196,22 @@ public struct ChatScreen: View {
                 actionLabel: "Retry",
                 onAction: { sdk.initialize() }
             )
-            .environment(\.chatColors, colors)
         case .ready:
             if store.messages.isEmpty {
-                let welcome = sdk.orgConfig?.settings.welcomeMessage
-                if let welcome, !welcome.isEmpty {
-                    VStack(alignment: .leading) {
-                        EmptyState(welcomeMessage: welcome)
-                            .environment(\.chatColors, colors)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                } else {
-                    Color.clear
-                }
+                Color.clear
             } else {
                 MessageList(
                     messages: store.messages,
                     agentTyping: typingAllowed && store.agentTyping,
+                    ended: store.flowState == .ended,
                     onRetry: { sdk.retryMessage(messageId: $0) },
                     onImageTap: { att in viewerAttachment = att },
                     onAnswer: { id, action, content in
                         try await sdk.answerElicitation(messageId: id, action: action, content: content)
                     },
-                    onOpenStep: { sdk.openSecurePage($0) }
+                    onOpenStep: { sdk.openSecurePage($0) },
+                    backgroundImage: sdk.orgConfig?.appearance?.backgroundImage
                 )
-                .environment(\.chatColors, colors)
             }
         }
     }
@@ -210,7 +224,7 @@ public struct ChatScreen: View {
         case .ready: break
         }
         switch store.flowState {
-        case .handoffPending: return "Waiting for an agent…"
+        case .handoffPending: return WaitingCopy.title
         case .liveChat: return "Live agent"
         case .botConversation: return "AI Assistant"
         case .ended: return "Conversation ended"
@@ -248,62 +262,122 @@ struct ChatHeader: View {
     let showOnlineStatus: Bool
     let isOnline: Bool
     let showHandoffButton: Bool
+    var hero: Bool = false
+    var welcomeMessage: String = ""
     let onRequestHandoff: () -> Void
     let onClose: () -> Void
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            if let url = logoUrl, !url.isEmpty {
-                HeaderLogo(url: url)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(ChatHeader.titleCase(title))
-                    .font(.headline)
-                    .foregroundColor(colors.headerPrimaryText)
-                    .lineLimit(1)
-                if !subtitle.isEmpty {
-                    HStack(spacing: 4) {
-                        if showOnlineStatus {
-                            ZStack {
-                                if isOnline {
-                                    Circle()
-                                        .fill(colors.onlineStatus.opacity(0.45))
-                                        .frame(width: 8, height: 8)
-                                        .blur(radius: 1)
-                                }
-                                Circle()
-                                    .fill(isOnline ? colors.onlineStatus : Color.white.opacity(0.4))
-                                    .frame(width: 6, height: 6)
-                            }
-                            .frame(width: 8, height: 8)
-                            .accessibilityHidden(true)  // subtitle text conveys this
-                        }
-                        if let iconName = subtitleIconName {
-                            Image(systemName: iconName)
-                                .font(.caption2.weight(.medium))
-                                .foregroundColor(colors.headerSecondaryText)
-                                .accessibilityHidden(true)
-                        }
-                        Text(ChatHeader.titleCase(subtitle))
-                            .font(.caption2)
-                            .foregroundColor(colors.headerSecondaryText)
-                            .lineLimit(1)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            }
-            Spacer(minLength: 8)
-            if showHandoffButton {
-                HeaderIconButton(systemName: "headphones", color: colors.headerIcon, action: onRequestHandoff)
-                    .accessibilityLabel("Talk to a live agent")
-            }
-            HeaderIconButton(systemName: "xmark", color: colors.closeButton, action: onClose)
-                .accessibilityLabel("Close")
+        Group {
+            if hero { heroBody } else { compactBody }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(colors.headerBackground)
+        .frame(maxWidth: .infinity)
+        .background(HeaderBackdrop().ignoresSafeArea(edges: .top))
+    }
+
+    private var logo: String? {
+        guard let url = logoUrl, !url.isEmpty else { return nil }
+        return url
+    }
+
+    private var compactBody: some View {
+        HStack(alignment: .center, spacing: 8) {
+            closeChip
+            VStack(spacing: 2) {
+                HStack(spacing: 8) {
+                    if let url = logo {
+                        HeaderLogo(url: url, size: 24)
+                    }
+                    Text(ChatHeader.titleCase(title))
+                        .font(.headline.weight(.bold))
+                        .foregroundColor(colors.headerPrimaryText)
+                        .lineLimit(1)
+                }
+                statusLine(font: .footnote)
+            }
+            .frame(maxWidth: .infinity)
+            if showHandoffButton {
+                handoffChip
+            } else {
+                Color.clear
+                    .frame(width: 44, height: 44)
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+    }
+
+    private var heroBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                closeChip
+                Spacer(minLength: 8)
+                if showHandoffButton { handoffChip }
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                if let url = logo {
+                    HeaderLogo(url: url, size: 40)
+                        .padding(.bottom, 4)
+                }
+                Text(ChatHeader.titleCase(title))
+                    .font(.title.weight(.heavy))
+                    .tracking(-0.5)
+                    .foregroundColor(colors.headerPrimaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                if !welcomeMessage.isEmpty {
+                    Text(welcomeMessage)
+                        .font(.callout)
+                        .foregroundColor(colors.headerSecondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                statusLine(font: .footnote.weight(.semibold))
+                    .padding(.top, 4)
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 18)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func statusLine(font: Font) -> some View {
+        if !subtitle.isEmpty {
+            HStack(spacing: 6) {
+                if showOnlineStatus {
+                    Circle()
+                        .fill(isOnline ? colors.onlineStatus : colors.offlineStatus)
+                        .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)  // subtitle text conveys this
+                }
+                if let iconName = subtitleIconName {
+                    Image(systemName: iconName)
+                        .font(.caption2.weight(.semibold))
+                        .accessibilityHidden(true)
+                }
+                Text(ChatHeader.titleCase(subtitle))
+                    .lineLimit(1)
+            }
+            .font(font)
+            .foregroundColor(colors.headerSecondaryText)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var closeChip: some View {
+        HeaderIconButton(systemName: "chevron.down", fill: colors.closeChip, color: colors.closeButton, action: onClose)
+            .accessibilityLabel("Close")
+    }
+
+    private var handoffChip: some View {
+        HeaderIconButton(systemName: "headphones", fill: colors.iconChip, color: colors.headerIcon, action: onRequestHandoff)
+            .accessibilityLabel("Talk to a live agent")
     }
 
     private var subtitleIconName: String? {
@@ -322,39 +396,77 @@ struct ChatHeader: View {
         let mapped: [String] = words.map { raw in
             let word = String(raw)
             if word.isEmpty { return word }
-            if word == word.uppercased() && word.count <= 4 { return word }
-            let first = word.prefix(1).uppercased()
-            let rest = word.dropFirst().lowercased()
-            return first + rest
+            return word.prefix(1).uppercased() + word.dropFirst()
         }
         return mapped.joined(separator: " ")
     }
 }
 
-/// 32-pt round icon button used by the header for handoff / close.
-/// Subtle hover-style background via a semi-transparent shape so the
-/// merchant's header tint comes through.
+struct HeaderBackdrop: View {
+    @Environment(\.chatColors) private var colors
+
+    var body: some View {
+        let stops = colors.headerStops
+        GeometryReader { geo in
+            let w = max(geo.size.width, 1)
+            let h = max(geo.size.height, 1)
+            let points = HeaderBackdrop.gradientPoints(width: w, height: h)
+            ZStack {
+                LinearGradient(
+                    gradient: Gradient(colors: [colors.headerBackground, stops.deep]),
+                    startPoint: points.start,
+                    endPoint: points.end
+                )
+                RadialGradient(
+                    gradient: Gradient(colors: [stops.glow, stops.glow.opacity(0)]),
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: 0.6 * 1.2 * w
+                )
+                .frame(width: 2.4 * w, height: 2.4 * w)
+                .scaleEffect(x: 1, y: (1.4 * h) / (1.2 * w))
+                .position(x: w, y: 0)
+            }
+        }
+        .clipped()
+        .overlay(Rectangle().fill(Color.black.opacity(0.06)).frame(height: 1), alignment: .bottom)
+        .accessibilityHidden(true)
+    }
+
+    static func gradientPoints(width w: CGFloat, height h: CGFloat) -> (start: UnitPoint, end: UnitPoint) {
+        let angle = CGFloat.pi * 160 / 180
+        let dx = sin(angle), dy = -cos(angle)
+        let span = abs(w * dx) + abs(h * dy)
+        let ux = dx * span / (2 * w), uy = dy * span / (2 * h)
+        return (UnitPoint(x: 0.5 - ux, y: 0.5 - uy), UnitPoint(x: 0.5 + ux, y: 0.5 + uy))
+    }
+}
+
+/// 44-pt round icon button used by the header for handoff / close.
 private struct HeaderIconButton: View {
     let systemName: String
+    let fill: Color
     let color: Color
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(color)
-                .frame(width: 32, height: 32)
-                .background(Circle().fill(Color.white.opacity(0.001)))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(fill))
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
     }
 }
 
-/// Cached 32×32 rounded logo in the header. Falls back to a tinted
+/// Cached rounded logo tile in the header. Falls back to a tinted
 /// silhouette when the URL fails to load.
 struct HeaderLogo: View {
     let url: String
+    var size: CGFloat = 32
     @Environment(\.chatColors) private var colors
 
     var body: some View {
@@ -365,14 +477,15 @@ struct HeaderLogo: View {
             },
             placeholder: { fallback }
         )
-        .frame(width: 32, height: 32)
-        .background(colors.headerPrimaryText.opacity(0.15))
-        .clipShape(Circle())
+        .frame(width: size, height: size)
+        .background(colors.logoTile)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .accessibilityHidden(true)
     }
 
     private var fallback: some View {
         Image(systemName: "bubble.left.and.bubble.right.fill")
-            .font(.system(size: 14))
+            .font(.system(size: size * 0.45))
             .foregroundColor(colors.headerPrimaryText.opacity(0.7))
     }
 }
@@ -391,33 +504,27 @@ struct SystemNoticeBlock: View {
     var body: some View {
         VStack(spacing: 14) {
             Spacer()
-            ZStack {
-                Circle()
-                    .fill(colors.typingBg)
-                    .frame(width: 56, height: 56)
-                Image(systemName: iconName)
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundColor(colors.textSecondary)
-            }
+            Image(systemName: iconName)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(colors.systemMessageText)
+                .frame(width: 56, height: 56)
+                .background(RoundedRectangle(cornerRadius: 56 * 0.22, style: .continuous).fill(colors.receivedBubble))
             Text(text)
                 .font(.callout)
-                .foregroundColor(colors.textSecondary)
+                .foregroundColor(colors.systemMessageText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
             if let label = actionLabel, let action = onAction {
                 Button(action: action) {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.footnote.weight(.semibold))
                         Text(label)
-                            .font(.footnote.weight(.semibold))
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .background(
-                        Capsule().fill(colors.primary)
-                    )
+                    .font(.subheadline.weight(.bold))
                     .foregroundColor(colors.sendButtonIcon)
+                    .padding(.horizontal, 20)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(colors.sendButtonBg))
                 }
                 .buttonStyle(.plain)
             }
@@ -438,10 +545,10 @@ struct ConnectingPlaceholder: View {
         VStack(spacing: 12) {
             Spacer()
             ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: colors.primary))
+                .progressViewStyle(CircularProgressViewStyle(tint: colors.sendButtonBg))
             Text(text)
                 .font(.footnote)
-                .foregroundColor(colors.textSecondary)
+                .foregroundColor(colors.systemMessageText)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
             Spacer()
@@ -452,44 +559,93 @@ struct ConnectingPlaceholder: View {
 
 struct ConnectionBanner: View {
     let text: String
+    var iconName: String = "wifi.slash"
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        Text(text)
-            .font(.caption)
-            .foregroundColor(colors.textSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(colors.typingBg)
+        HStack(spacing: 8) {
+            Image(systemName: iconName)
+                .font(.footnote.weight(.semibold))
+                .foregroundColor(colors.warningColor)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.footnote.weight(.medium))
+                .foregroundColor(colors.receivedText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(colors.warnTint)
+        .overlay(Rectangle().fill(colors.hairline).frame(height: 1), alignment: .bottom)
     }
 }
 
-struct EmptyState: View {
-    let welcomeMessage: String
+struct WaitingCard: View {
+    let queuePosition: Int?
+    let estimatedWaitSeconds: Int?
     @Environment(\.chatColors) private var colors
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("AI")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(colors.textSecondary)
-                .padding(.leading, 4)
-            HStack {
-                Text(welcomeMessage)
-                    .font(.body)
-                    .foregroundColor(colors.receivedText)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .background(
-                        RoundedCorners(tl: 16, tr: 16, bl: 4, br: 16)
-                            .fill(colors.receivedBubble)
-                    )
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "clock")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(colors.sendButtonBg)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(colors.background))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: WaitingCopy.title)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(colors.receivedText)
+                    if let detail = WaitingCopy.detail(queuePosition: queuePosition, estimatedWaitSeconds: estimatedWaitSeconds) {
+                        Text(verbatim: detail)
+                            .font(.footnote)
+                            .foregroundColor(colors.systemMessageText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Spacer(minLength: 0)
             }
+            .padding(.horizontal, 16)
+            IndeterminateBar()
+                .frame(height: 4)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 14)
+        .background(colors.receivedBubble)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(colors.hairline, lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .background(colors.background)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+private struct IndeterminateBar: View {
+    @Environment(\.chatColors) private var colors
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var moving = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let segment = geo.size.width * 0.38
+            ZStack(alignment: .leading) {
+                colors.hairline
+                Capsule()
+                    .fill(colors.sendButtonBg)
+                    .frame(width: segment)
+                    .offset(x: reduceMotion ? geo.size.width * 0.22 : (moving ? geo.size.width : -segment))
+            }
+        }
+        .clipped()
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false)) { moving = true }
+        }
+        .accessibilityHidden(true)
     }
 }
 

@@ -328,6 +328,7 @@ sdk.attach(
 )
 
 sdk.removeAttachment(id: id)
+sdk.retryAttachment(id: id)
 sdk.clearAttachments()
 
 sdk.retryMessage(messageId: failedMessage.id)
@@ -439,6 +440,16 @@ scheme decides.
 If no dashboard configuration is reachable, your local theme still applies and
 the built-in palette fills the rest, so the chat is always fully themed, even
 offline. You get a `configFetchFailed` warning on the error channel.
+
+A few colours are derived rather than set. The header draws a gradient from
+`headerBackground` (a lighter glow top right, a deeper tone bottom left),
+computed the same way as on Android and web, so it holds for any colour,
+including white and black. Pick header text that reads on both the base and
+the deeper tone; the dashboard editor warns when either end is below 4.5:1.
+The customer's time and delivery ticks sit inside the sent bubble, so choose
+`sentTimestamp` against `sentBubble`. A background image set in the dashboard
+is drawn behind the messages with its opacity, size, position, repeat and
+overlay.
 
 ## Chat rating
 
