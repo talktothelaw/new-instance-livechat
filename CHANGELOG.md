@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Redesigned chat screen. Every color still comes from the merchant's appearance settings. The header now draws a gradient from the Header Background color: a lighter glow in the top-right corner and a deeper tone in the bottom-left, derived the same way on iOS, Android and web, so the look holds for any color, including white and black.
 - With no messages yet, the header grows into a welcome hero with the title, `welcomeMessage` and the status line.

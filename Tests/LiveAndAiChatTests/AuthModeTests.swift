@@ -113,8 +113,8 @@ final class AuthHeaderTests: XCTestCase {
         let request = try XCTUnwrap(StubURLProtocol.requests.last)
         XCTAssertEqual(request.value(forHTTPHeaderField: "x-api-key"), secretKey)
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(request.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.6.0")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "LiveAndAiChat-iOS/0.6.0")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.7.0")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "LiveAndAiChat-iOS/0.7.0")
     }
 
     func testJwtModeSendsOnlyBearer() async throws {
@@ -128,7 +128,7 @@ final class AuthHeaderTests: XCTestCase {
         let request = try XCTUnwrap(StubURLProtocol.requests.last)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(token)")
         XCTAssertNil(request.value(forHTTPHeaderField: "x-api-key"))
-        XCTAssertEqual(request.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.6.0")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.7.0")
     }
 
     func testCredentialSwapAppliesToLaterRequests() async throws {
@@ -193,8 +193,8 @@ final class AuthHeaderTests: XCTestCase {
         let streamHeaders = jwtClient.requestHeaders(streamToken: "stream-token")
         XCTAssertEqual(streamHeaders["Authorization"], "Bearer \(token)")
         XCTAssertNil(streamHeaders["x-api-key"])
-        XCTAssertEqual(streamHeaders["x-newinstance-sdk"], "ios/0.6.0")
-        XCTAssertEqual(streamHeaders["User-Agent"], "LiveAndAiChat-iOS/0.6.0")
+        XCTAssertEqual(streamHeaders["x-newinstance-sdk"], "ios/0.7.0")
+        XCTAssertEqual(streamHeaders["User-Agent"], "LiveAndAiChat-iOS/0.7.0")
         XCTAssertEqual(streamHeaders["X-GraphQL-Event-Stream-Token"], "stream-token")
 
         let keyClient = SseSubscriptionClient(
@@ -204,7 +204,7 @@ final class AuthHeaderTests: XCTestCase {
         let keyHeaders = keyClient.requestHeaders()
         XCTAssertEqual(keyHeaders["x-api-key"], secretKey)
         XCTAssertNil(keyHeaders["Authorization"])
-        XCTAssertEqual(keyHeaders["x-newinstance-sdk"], "ios/0.6.0")
+        XCTAssertEqual(keyHeaders["x-newinstance-sdk"], "ios/0.7.0")
     }
 
     func testSseReserveSendsCredential() {
@@ -225,7 +225,7 @@ final class AuthHeaderTests: XCTestCase {
         let put = StubURLProtocol.requests.first { $0.httpMethod == "PUT" }
         XCTAssertEqual(put?.value(forHTTPHeaderField: "x-api-key"), secretKey)
         XCTAssertNil(put?.value(forHTTPHeaderField: "Authorization"))
-        XCTAssertEqual(put?.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.6.0")
+        XCTAssertEqual(put?.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.7.0")
     }
 
     func testWsUpgradeCarriesCredentialAndInitHasNoCredential() throws {
@@ -237,7 +237,7 @@ final class AuthHeaderTests: XCTestCase {
         let jwtRequest = jwtClient.upgradeRequest()
         XCTAssertEqual(jwtRequest.value(forHTTPHeaderField: "Authorization"), "Bearer \(token)")
         XCTAssertNil(jwtRequest.value(forHTTPHeaderField: "x-api-key"))
-        XCTAssertEqual(jwtRequest.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.6.0")
+        XCTAssertEqual(jwtRequest.value(forHTTPHeaderField: "x-newinstance-sdk"), "ios/0.7.0")
         XCTAssertEqual(jwtRequest.value(forHTTPHeaderField: "Sec-WebSocket-Protocol"), "graphql-transport-ws")
 
         let keyClient = WsSubscriptionClient(

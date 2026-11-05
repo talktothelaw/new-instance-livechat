@@ -469,10 +469,10 @@ final class ElicitationTests: XCTestCase {
     }
 
     func testSendsIos050Header() {
-        XCTAssertEqual(LiveAndAiChat.version, "0.6.0")
+        XCTAssertEqual(LiveAndAiChat.version, "0.7.0")
         let headers = ChatCredential(.apiKey("sk_live_k:secret")).headers()
-        XCTAssertEqual(headers["x-newinstance-sdk"], "ios/0.6.0")
-        XCTAssertEqual(headers["User-Agent"], "LiveAndAiChat-iOS/0.6.0")
+        XCTAssertEqual(headers["x-newinstance-sdk"], "ios/0.7.0")
+        XCTAssertEqual(headers["User-Agent"], "LiveAndAiChat-iOS/0.7.0")
     }
 
     private func answerVariables(_ request: URLRequest) -> [String: Any]? {
